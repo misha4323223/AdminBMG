@@ -1,0 +1,42 @@
+{
+  "name": "admin-bmg-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BOOOMERANGS Админка — десктопное приложение для Windows",
+  "author": "BOOOMERANGS",
+  "main": "main.js",
+  "scripts": {
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "ru.booomerangs.admin.desktop",
+    "productName": "BOOOMERANGS Админка",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "dist/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BOOOMERANGS Админка"
+    }
+  }
+}

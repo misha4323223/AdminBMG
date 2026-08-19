@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "BOOOMERANGS Админка",
+    "slug": "admin-bmg",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "adminbmg",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "ru.booomerangs.admin",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "ru.booomerangs.admin",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0b0f"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8afeb2c4-7991-450a-96a1-1d8180866152"
+      }
+    }
+  }
+}
