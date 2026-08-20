@@ -103,3 +103,65 @@ export async function uploadImage(localUri: string, filename?: string): Promise<
   if (!data?.url) throw new Error("Сервер не вернул URL");
   return data.url as string;
 }
+
+/**
+ * Загрузка произвольного файла (аудио, обложка и т.п.) сырым телом на серверный маршрут.
+ * Путь указывается относительно API_BASE_URL (например "/admin/artists/foo/upload-audio").
+ */
+export async function uploadRawFile(
+  path: string,
+  localUri: string,
+  filename?: string,
+  contentType?: string,
+): Promise<string> {
+  const token = await getStoredToken();
+  const apiKey = await getStoredApiKey();
+  const blob: Blob = await fetch(localUri).then((r) => r.blob());
+  const name = filename || `file_${Date.now()}`;
+
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body: blob,
+    headers: {
+      "x-api-key": apiKey || "",
+      "x-filename": encodeURIComponent(name),
+      "Content-Type": contentType || blob.type || "application/octet-stream",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  if (!data?.url) throw new Error("Сервер не вернул URL файла");
+  return data.url as string;
+}
+
+/** Загрузка изображения для HTML-письма (отдельный storage-префикс на сервере). */
+export async function uploadEmailImage(localUri: string, filename?: string): Promise<string> {
+  const token = await getStoredToken();
+  const apiKey = await getStoredApiKey();
+  const blob: Blob = await fetch(localUri).then((r) => r.blob());
+  const name = filename || `email_${Date.now()}.jpg`;
+
+  const res = await fetch(`${API_BASE_URL}/admin/upload-email-image`, {
+    method: "POST",
+    body: blob,
+    headers: {
+      "x-api-key": apiKey || "",
+      "x-filename": encodeURIComponent(name),
+      "Content-Type": blob.type || "image/jpeg",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  if (!data?.url) throw new Error("Сервер не вернул URL изображения");
+  return data.url as string;
+}

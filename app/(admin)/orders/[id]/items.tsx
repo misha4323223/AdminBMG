@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { Button, Card, Field, InlineError, LoadingView, SearchBar, SectionTitle } from "@/components/ui";
 import { apiGet, apiPatch, getErrorMessage } from "@/lib/api";
 import { formatRub } from "@/lib/format";
+import { productThumb } from "@/lib/images";
 import type { Order, Product } from "@/lib/types";
 import { colors, spacing } from "@/constants/theme";
 
@@ -162,7 +164,17 @@ export default function OrderItemsScreen() {
             style={{ maxHeight: 260 }}
             renderItem={({ item }) => (
               <Pressable onPress={() => addProduct(item)} style={styles.productRow}>
-                <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
+                {productThumb(item) ? (
+                  <Image source={{ uri: productThumb(item) }} style={styles.productThumb} contentFit="cover" />
+                ) : (
+                  <View style={[styles.productThumb, styles.productThumbEmpty]}>
+                    <Ionicons name="image-outline" size={16} color={colors.textMuted} />
+                  </View>
+                )}
+                <View style={styles.productInfo}>
+                  <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
+                  <Text style={styles.productId}>#{item.id}{item.slug ? ` · ${item.slug}` : ""}</Text>
+                </View>
                 <Text style={styles.productPrice}>{formatRub(item.price)}</Text>
               </Pressable>
             )}
@@ -232,7 +244,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  productName: { color: colors.text, fontSize: 13, flex: 1 },
+  productName: { color: colors.text, fontSize: 13 },
+  productInfo: { flex: 1 },
+  productId: { color: colors.textMuted, fontSize: 10, marginTop: 2 },
+  productThumb: { width: 36, height: 36, borderRadius: 6, backgroundColor: colors.surfaceAlt },
+  productThumbEmpty: { alignItems: "center", justifyContent: "center" },
   productPrice: { color: colors.accent, fontSize: 13, fontWeight: "600" },
   list: { padding: spacing.lg, gap: spacing.md },
   itemCard: { marginBottom: spacing.sm },

@@ -21,7 +21,12 @@ import {
 } from "@/components/MeasurementsEditor";
 import { apiDelete, apiGet, apiPatch, getErrorMessage, uploadImage } from "@/lib/api";
 import { asText } from "@/lib/format";
-import { subcategoriesFor, subSubsFor, useCategories } from "@/lib/categories";
+import {
+  mergeCategoriesWithProducts,
+  subcategoriesFor,
+  subSubsFor,
+  useCategories,
+} from "@/lib/categories";
 import type { Product } from "@/lib/types";
 import { colors, radius, spacing } from "@/constants/theme";
 
@@ -262,9 +267,17 @@ export default function ProductDetailScreen() {
     return arr;
   }, [product]);
 
-  const subcategories = form.category ? subcategoriesFor(categories, form.category) : [];
+  // Слияние конфига с данными самого товара — чтобы текущие значения категорий
+  // (например «Спортивные (40-45)» у носков, отсутствующие в конфиге) не терялись.
+  const mergedCategories = useMemo(
+    () => mergeCategoriesWithProducts(categories, product ? [product] : []),
+    [categories, product],
+  );
+  const subcategories = form.category
+    ? subcategoriesFor(mergedCategories, form.category)
+    : [];
   const subSubs = form.subcategory
-    ? subSubsFor(categories, form.category, form.subcategory)
+    ? subSubsFor(mergedCategories, form.category, form.subcategory)
     : [];
 
   if (loading) {
@@ -422,7 +435,21 @@ export default function ProductDetailScreen() {
     }
   };
 
-  const categoryOptions = Object.entries(categories).map(([slug, c]) => ({
+  const moveImage = async (idx: number, dir: -1 | 1) => {
+    const to = idx + dir;
+    if (to < 0 || to >= images.length) return;
+    setError("");
+    try {
+      const nextImages = [...images];
+      [nextImages[idx], nextImages[to]] = [nextImages[to], nextImages[idx]];
+      await apiPatch(`/admin/products/${id}`, { images: nextImages, imageUrl: nextImages[0] });
+      setProduct((prev) => (prev ? { ...prev, images: nextImages, imageUrl: nextImages[0] } : prev));
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  };
+
+  const categoryOptions = Object.entries(mergedCategories).map(([slug, c]) => ({
     value: slug,
     label: c.name,
   }));
@@ -435,11 +462,30 @@ export default function ProductDetailScreen() {
         <SectionTitle>Фото</SectionTitle>
         <View style={styles.imageRow}>
           {images.slice(0, 10).map((uri, i) => (
-            <View key={i}>
+            <View key={i} style={styles.imgCell}>
               <Image source={{ uri }} style={styles.image} contentFit="cover" />
               <Pressable style={styles.removeImg} onPress={() => removeImage(i)}>
                 <Ionicons name="close" size={12} color="#fff" />
               </Pressable>
+              <View style={styles.imgMoveRow}>
+                <Pressable
+                  style={[styles.imgMoveBtn, i === 0 && styles.imgMoveDisabled]}
+                  disabled={i === 0}
+                  onPress={() => moveImage(i, -1)}
+                  hitSlop={4}
+                >
+                  <Ionicons name="chevron-back" size={14} color={i === 0 ? colors.textMuted : colors.text} />
+                </Pressable>
+                <Text style={styles.imgIndex}>{i + 1}</Text>
+                <Pressable
+                  style={[styles.imgMoveBtn, i === images.length - 1 && styles.imgMoveDisabled]}
+                  disabled={i === images.length - 1}
+                  onPress={() => moveImage(i, 1)}
+                  hitSlop={4}
+                >
+                  <Ionicons name="chevron-forward" size={14} color={i === images.length - 1 ? colors.textMuted : colors.text} />
+                </Pressable>
+              </View>
             </View>
           ))}
           {images.length < 10 ? (
@@ -448,6 +494,9 @@ export default function ProductDetailScreen() {
             </Pressable>
           ) : null}
         </View>
+        <Text style={styles.hint}>
+          Первое фото — главное. Стрелками ← → меняйте порядок фото.
+        </Text>
         {uploading ? <Text style={styles.hint}>Загрузка…</Text> : null}
       </Card>
 
@@ -482,17 +531,37 @@ export default function ProductDetailScreen() {
           value={form.category}
           options={categoryOptions}
           placeholder="Выберите категорию"
-          onChange={(v) => set("category", v)}
+          onChange={(v) => {
+            set("category", v);
+            // Как на сайте: при смене категории сбрасываем подкатегорию и под-подкатегорию
+            set("subcategory", "");
+            set("subSubcategory", "");
+          }}
         />
-        <SelectField
-          label="Подкатегория"
-          value={form.subcategory}
-          options={subcategories.map((s) => ({ value: s.name, label: s.name }))}
-          placeholder="Без подкатегории"
-          allowEmpty={false}
-          onChange={(v) => set("subcategory", v)}
-        />
-        {subSubs.length > 0 ? (
+        {subcategories.length > 0 ? (
+          <SelectField
+            label="Подкатегория"
+            value={form.subcategory}
+            options={subcategories.map((s) => ({ value: s.name, label: s.name }))}
+            placeholder="Без подкатегории"
+            onChange={(v) => {
+              set("subcategory", v || "");
+              // Как на сайте: при смене подкатегории сбрасываем под-подкатегорию
+              set("subSubcategory", "");
+            }}
+          />
+        ) : (
+          <Field
+            label="Подкатегория"
+            value={form.subcategory}
+            onChangeText={(v) => {
+              set("subcategory", v);
+              set("subSubcategory", "");
+            }}
+            placeholder="Футболки"
+          />
+        )}
+        {subSubs.length > 0 && form.subcategory ? (
           <SelectField
             label="Под-подкатегория"
             value={form.subSubcategory}
@@ -529,7 +598,7 @@ export default function ProductDetailScreen() {
         <AdditionalCategoriesEditor
           value={additionalCategories}
           onChange={setAdditionalCategories}
-          categories={categories}
+          categories={mergedCategories}
         />
       </Accordion>
 
@@ -560,7 +629,7 @@ export default function ProductDetailScreen() {
       </Accordion>
 
       <Accordion
-        title="SEO"
+        title="SEO (поисковая оптимизация)"
         icon="search-outline"
         badge={
           <BadgeCount>
@@ -568,10 +637,10 @@ export default function ProductDetailScreen() {
           </BadgeCount>
         }
       >
-        <Field label="SEO title" value={form.seoTitle} onChangeText={(v) => set("seoTitle", v)} multiline />
-        <Field label="SEO description" value={form.seoDescription} onChangeText={(v) => set("seoDescription", v)} multiline />
-        <Field label="SEO body (HTML)" value={form.seoBody} onChangeText={(v) => set("seoBody", v)} multiline />
-        <Field label="JSON-LD" value={form.seoJsonLd} onChangeText={(v) => set("seoJsonLd", v)} multiline />
+        <Field label="SEO-заголовок" value={form.seoTitle} onChangeText={(v) => set("seoTitle", v)} multiline />
+        <Field label="SEO-описание" value={form.seoDescription} onChangeText={(v) => set("seoDescription", v)} multiline />
+        <Field label="SEO-текст (HTML)" value={form.seoBody} onChangeText={(v) => set("seoBody", v)} multiline />
+        <Field label="JSON-LD (разметка)" value={form.seoJsonLd} onChangeText={(v) => set("seoJsonLd", v)} multiline />
         <Field label="Alt-тексты фото (по одному на строку)" value={form.imageAlts} onChangeText={(v) => set("imageAlts", v)} multiline />
       </Accordion>
 
@@ -656,7 +725,24 @@ function BadgeCount({ children }: { children: React.ReactNode }) {
 const styles = StyleSheet.create({
   photosCard: { marginBottom: spacing.md },
   imageRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  imgCell: { width: 64 },
   image: { width: 64, height: 64, borderRadius: radius.sm, backgroundColor: colors.surfaceAlt },
+  imgMoveRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 2,
+  },
+  imgMoveBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  imgMoveDisabled: { opacity: 0.4 },
+  imgIndex: { color: colors.textMuted, fontSize: 10, fontWeight: "600" },
   removeImg: {
     position: "absolute",
     top: -6,

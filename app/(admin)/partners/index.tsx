@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,10 +22,25 @@ import {
   SectionTitle,
 } from "@/components/ui";
 import { apiDelete, apiGet, apiPatch, apiPost, getErrorMessage } from "@/lib/api";
-import { formatDate, formatRub } from "@/lib/format";
-import { colors, spacing } from "@/constants/theme";
+import {
+  commissionStatusLabel,
+  formatDate,
+  formatRub,
+  legalStatusLabel,
+  partnerStatusLabel,
+  payoutStatusLabel,
+} from "@/lib/format";
+import { colors, radius, spacing } from "@/constants/theme";
 
-type Tab = "partners" | "payouts" | "commissions" | "artists" | "settings";
+type Tab = "partners" | "commissions" | "payouts" | "settings";
+
+const STATUS_FILTERS = [
+  { key: "all", label: "Все" },
+  { key: "pending", label: "На модерации" },
+  { key: "approved", label: "Одобрены" },
+  { key: "rejected", label: "Отклонены" },
+  { key: "blocked", label: "Заблокированы" },
+];
 
 export default function PartnersScreen() {
   const [tab, setTab] = useState<Tab>("partners");
@@ -33,16 +49,14 @@ export default function PartnersScreen() {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsScroll}>
         <View style={styles.tabs}>
           <TabBtn label="Партнёры" active={tab === "partners"} onPress={() => setTab("partners")} />
-          <TabBtn label="Выплаты" active={tab === "payouts"} onPress={() => setTab("payouts")} />
           <TabBtn label="Комиссии" active={tab === "commissions"} onPress={() => setTab("commissions")} />
-          <TabBtn label="Артисты" active={tab === "artists"} onPress={() => setTab("artists")} />
+          <TabBtn label="Выплаты" active={tab === "payouts"} onPress={() => setTab("payouts")} />
           <TabBtn label="Настройки" active={tab === "settings"} onPress={() => setTab("settings")} />
         </View>
       </ScrollView>
       {tab === "partners" ? <PartnersList /> : null}
-      {tab === "payouts" ? <PayoutsList /> : null}
       {tab === "commissions" ? <CommissionsList /> : null}
-      {tab === "artists" ? <ArtistsList /> : null}
+      {tab === "payouts" ? <PayoutsList /> : null}
       {tab === "settings" ? <SettingsView /> : null}
     </Screen>
   );
@@ -51,164 +65,394 @@ export default function PartnersScreen() {
 function PartnersList() {
   const [partners, setPartners] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [busyKind, setBusyKind] = useState<string | null>(null);
   const [commissionDrafts, setCommissionDrafts] = useState<Record<number, string>>({});
+  const [artistRateDrafts, setArtistRateDrafts] = useState<Record<number, string>>({});
+  const [showCreateArtist, setShowCreateArtist] = useState(false);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (refresh = false) => {
+    if (refresh) setRefreshing(true);
+    else setLoading(true);
     setError("");
     try {
-      const data = await apiGet<{ partners: any[] }>("/admin/partners");
+      const url =
+        statusFilter === "all" ? "/admin/partners" : `/admin/partners?status=${statusFilter}`;
+      const data = await apiGet<{ partners: any[] }>(url);
       setPartners(data.partners || []);
     } catch (e) {
       setError(getErrorMessage(e));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
 
-  const setStatus = async (p: any, status: string) => {
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return partners;
+    return partners.filter((p) =>
+      [p.contactEmail, p.partnerSlug, p.storeName, p.contactName]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [partners, search]);
+
+  const run = async (id: number, kind: string, action: () => Promise<unknown>) => {
+    setBusyId(id);
+    setBusyKind(kind);
     setError("");
     try {
-      await apiPatch(`/admin/partners/${p.id}/status`, { status });
-      load();
+      await action();
+      await load(true);
+      setDeleteId(null);
     } catch (e) {
       setError(getErrorMessage(e));
+    } finally {
+      setBusyId(null);
+      setBusyKind(null);
     }
   };
 
-  const saveCommission = async (p: any) => {
-    setError("");
-    try {
-      const raw = commissionDrafts[p.id];
-      await apiPatch(`/admin/partners/${p.id}/commission`, {
-        percent: raw === "" ? null : Number(raw),
-      });
-      load();
-    } catch (e) {
-      setError(getErrorMessage(e));
-    }
+  const setStatus = (p: any, status: string) =>
+    run(p.id, `status:${status}`, () => apiPatch(`/admin/partners/${p.id}/status`, { status }));
+
+  const saveCommission = (p: any) => {
+    const raw = commissionDrafts[p.id];
+    return run(p.id, "commission", () =>
+      apiPatch(`/admin/partners/${p.id}/commission`, {
+        percent: raw === "" || raw == null ? null : Number(raw),
+      }),
+    );
   };
 
-  const toggleArtist = async (p: any) => {
-    setError("");
-    try {
-      await apiPatch(`/admin/partners/${p.id}/artist`, { isArtist: !p.isArtist });
-      load();
-    } catch (e) {
-      setError(getErrorMessage(e));
-    }
+  const saveArtistRate = (p: any) => {
+    const raw = artistRateDrafts[p.id];
+    return run(p.id, "artist-rate", () =>
+      apiPatch(`/admin/partners/${p.id}/artist-rate`, {
+        rate: raw === "" || raw == null ? null : Number(raw),
+      }),
+    );
   };
 
-  const toggleHomepage = async (p: any) => {
-    setError("");
-    try {
-      await apiPatch(`/admin/partners/${p.id}/homepage`, { showOnHomepage: !p.showOnHomepage });
-      load();
-    } catch (e) {
-      setError(getErrorMessage(e));
+  const remove = (p: any) => {
+    if (deleteId !== p.id) {
+      setDeleteId(p.id);
+      return;
     }
+    return run(p.id, "delete", () => apiDelete(`/admin/partners/${p.id}`));
   };
 
   return (
-    <FlatList
-      data={partners}
-      keyExtractor={(p) => String(p.id)}
-      onRefresh={load}
-      refreshing={loading}
-      contentContainerStyle={styles.list}
-      ListHeaderComponent={<InlineError text={error} />}
+    <>
+      <FlatList
+        data={filtered}
+        keyExtractor={(p) => String(p.id)}
+        onRefresh={() => load(true)}
+        refreshing={refreshing}
+        contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+        <View style={styles.headerBlock}>
+          <InlineError text={error} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.filterRow}>
+              {STATUS_FILTERS.map((f) => (
+                <Pressable
+                  key={f.key}
+                  onPress={() => setStatusFilter(f.key)}
+                  style={[styles.filterChip, statusFilter === f.key && styles.filterChipOn]}
+                >
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      statusFilter === f.key && styles.filterChipTextOn,
+                    ]}
+                  >
+                    {f.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </ScrollView>
+          <View style={styles.toolbar}>
+            <Button
+              title="Создать артиста"
+              variant="secondary"
+              icon="person-add-outline"
+              onPress={() => setShowCreateArtist(true)}
+            />
+            <View style={styles.searchWrap}>
+              <Ionicons name="search" size={16} color={colors.textMuted} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Поиск..."
+                placeholderTextColor={colors.textMuted}
+                style={styles.searchInput}
+              />
+            </View>
+          </View>
+        </View>
+      }
       renderItem={({ item }) => {
         const expanded = expandedId === item.id;
+        const stats = item.stats || {};
         return (
           <View style={styles.partnerCard}>
             <Pressable onPress={() => setExpandedId(expanded ? null : item.id)}>
               <View style={styles.partnerHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.title}>
-                    {item.storeName || item.contactName || item.partnerSlug}
-                  </Text>
-                  <Text style={styles.sub}>
-                    {item.contactEmail}
-                    {item.contactPhone ? ` · ${item.contactPhone}` : ""}
-                  </Text>
+                  <View style={styles.partnerTitleRow}>
+                    <Text style={styles.title}>{item.storeName || item.contactName}</Text>
+                    {item.legalStatus ? (
+                      <Badge tone="neutral">{legalStatusLabel(item.legalStatus)}</Badge>
+                    ) : null}
+                    {item.payoutRequested ? <Badge tone="info">Запрос выплаты</Badge> : null}
+                  </View>
+                  <Text style={styles.sub}>{item.contactName || "—"}</Text>
+                  <Text style={styles.code}>{item.partnerSlug}</Text>
                 </View>
-                <Badge tone={statusTone(item.status)}>{item.status || "—"}</Badge>
-                <Ionicons
-                  name={expanded ? "chevron-up" : "chevron-down"}
-                  size={16}
-                  color={colors.textMuted}
-                />
+                <View style={styles.statusCol}>
+                  <Badge tone={statusTone(item.status)}>{partnerStatusLabel(item.status)}</Badge>
+                  <Ionicons
+                    name={expanded ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={colors.textMuted}
+                  />
+                </View>
               </View>
+
+              <Text style={styles.emailLine}>
+                {item.contactEmail}{" "}
+                {item.emailVerified === false ? (
+                  <Text style={styles.emailWarn}>⚠ не подтверждён</Text>
+                ) : item.emailVerified === true ? (
+                  <Text style={styles.emailOk}>✓ подтверждён</Text>
+                ) : null}
+              </Text>
 
               <View style={styles.statsRow}>
-                <Stat label="Комиссия" value={`${item.commissionOverride ?? "глоб."}%`} />
-                <Stat label="Заработано" value={formatRub(item.totalEarned)} />
-                <Stat label="Клики" value={String(item.clicksCount ?? 0)} />
+                <Stat label="Клики" value={String(stats.clicks ?? 0)} />
+                <Stat label="Заказы" value={String(stats.ordersCount ?? 0)} />
+                <Stat label="К выплате" value={formatRub(stats.confirmedAmount ?? 0)} />
               </View>
-
-              {item.status === "pending" ? (
-                <View style={styles.actions}>
-                  <Button title="Одобрить" onPress={() => setStatus(item, "approved")} icon="checkmark" />
-                  <Button title="Отклонить" variant="danger" onPress={() => setStatus(item, "rejected")} icon="close" />
-                </View>
-              ) : null}
-
-              {expanded ? (
-                <View style={styles.detail}>
-                  <DetailRow label="Slug" value={item.partnerSlug} />
-                  <DetailRow label="Контакт" value={item.contactName} />
-                  <DetailRow label="Статус" value={item.status} />
-                  <DetailRow label="Юр. статус" value={item.legalStatus} />
-                  <DetailRow label="Компания" value={item.companyName} />
-                  <DetailRow label="ИНН" value={item.inn} />
-                  <DetailRow label="Способ выплаты" value={item.payoutMethod} />
-                  <DetailRow label="Реквизиты" value={item.payoutDetails} />
-                  <DetailRow label="Получатель" value={item.payoutFullName} />
-                  <DetailRow label="Создан" value={formatDate(item.createdAt)} />
-
-                  <View style={styles.inlineForm}>
-                    <Text style={styles.formLabel}>Персональная комиссия, %</Text>
-                    <View style={styles.inlineRow}>
-                      <TextInput
-                        value={commissionDrafts[item.id] ?? (item.commissionOverride != null ? String(item.commissionOverride) : "")}
-                        onChangeText={(v) =>
-                          setCommissionDrafts((d) => ({ ...d, [item.id]: v }))
-                        }
-                        placeholder="глобальная"
-                        placeholderTextColor={colors.textMuted}
-                        keyboardType="numeric"
-                        style={styles.input}
-                      />
-                      <Button title="Сохранить" variant="secondary" onPress={() => saveCommission(item)} />
-                    </View>
-                  </View>
-
-                  <View style={styles.toggleRow}>
-                    <Text style={styles.toggleLabel}>Артист</Text>
-                    <Pressable onPress={() => toggleArtist(item)} style={[styles.toggle, item.isArtist && styles.toggleOn]}>
-                      <View style={[styles.dot, item.isArtist && styles.dotOn]} />
-                    </Pressable>
-                  </View>
-                  <View style={styles.toggleRow}>
-                    <Text style={styles.toggleLabel}>На главной</Text>
-                    <Pressable onPress={() => toggleHomepage(item)} style={[styles.toggle, item.showOnHomepage && styles.toggleOn]}>
-                      <View style={[styles.dot, item.showOnHomepage && styles.dotOn]} />
-                    </Pressable>
-                  </View>
-                </View>
-              ) : null}
             </Pressable>
+
+            <View style={styles.inlineForm}>
+              <InlineNumberField
+                label="% комиссии"
+                value={
+                  commissionDrafts[item.id] ??
+                  (item.commissionOverride != null ? String(item.commissionOverride) : "")
+                }
+                placeholder="глоб."
+                onChange={(v) => setCommissionDrafts((d) => ({ ...d, [item.id]: v }))}
+                onSave={() => saveCommission(item)}
+                saving={busyId === item.id && busyKind === "commission"}
+              />
+              {item.isArtist ? (
+                <InlineNumberField
+                  label="% артиста"
+                  value={
+                    artistRateDrafts[item.id] ??
+                    (item.artistRate != null ? String(item.artistRate) : "")
+                  }
+                  placeholder="—"
+                  onChange={(v) => setArtistRateDrafts((d) => ({ ...d, [item.id]: v }))}
+                  onSave={() => saveArtistRate(item)}
+                  saving={busyId === item.id && busyKind === "artist-rate"}
+                />
+              ) : (
+                <Text style={styles.artistEmpty}>% артиста: —</Text>
+              )}
+            </View>
+
+            <View style={styles.actions}>
+              {item.status !== "approved" ? (
+                <Button
+                  title="Одобрить"
+                  variant="secondary"
+                  onPress={() => setStatus(item, "approved")}
+                  loading={busyId === item.id && busyKind === "status:approved"}
+                  icon="checkmark"
+                />
+              ) : null}
+              {item.status === "pending" ? (
+                <Button
+                  title="Отклонить"
+                  variant="secondary"
+                  onPress={() => setStatus(item, "rejected")}
+                  loading={busyId === item.id && busyKind === "status:rejected"}
+                  icon="close"
+                />
+              ) : null}
+              {item.status !== "blocked" && item.status !== "pending" && item.status !== "rejected" ? (
+                <Button
+                  title="Заблокировать"
+                  variant="secondary"
+                  onPress={() => setStatus(item, "blocked")}
+                  loading={busyId === item.id && busyKind === "status:blocked"}
+                  icon="ban-outline"
+                />
+              ) : null}
+              {(item.status === "blocked" || item.status === "rejected") ? (
+                <Button
+                  title="Сбросить"
+                  variant="secondary"
+                  onPress={() => setStatus(item, "pending")}
+                  loading={busyId === item.id && busyKind === "status:pending"}
+                  icon="refresh"
+                />
+              ) : null}
+              <Button
+                title={deleteId === item.id ? "Точно удалить?" : "Удалить"}
+                variant="danger"
+                onPress={() => remove(item)}
+                loading={busyId === item.id && busyKind === "delete"}
+                icon="trash-outline"
+              />
+            </View>
+
+            {expanded ? (
+              <View style={styles.detail}>
+                <DetailRow label="Slug" value={item.partnerSlug} />
+                <DetailRow label="Контакт" value={item.contactName} />
+                <DetailRow label="Телефон" value={item.contactPhone} />
+                <DetailRow label="Статус" value={partnerStatusLabel(item.status)} />
+                <DetailRow label="Юр. статус" value={legalStatusLabel(item.legalStatus)} />
+                <DetailRow label="Компания" value={item.companyName} />
+                <DetailRow label="ИНН" value={item.inn} />
+                <DetailRow label="КПП" value={item.kpp} />
+                <DetailRow label="ОГРН/ОГРНИП" value={item.ogrn} />
+                <DetailRow label="Способ выплаты" value={item.payoutMethod} />
+                <DetailRow label="Реквизиты" value={item.payoutDetails} />
+                <DetailRow label="Получатель" value={item.payoutFullName} />
+                <DetailRow label="Создан" value={formatDate(item.createdAt)} />
+              </View>
+            ) : null}
           </View>
         );
-      }}
-      ListEmptyComponent={loading ? <LoadingView /> : <EmptyState text={error || "Партнёров нет"} />}
-    />
+      }}        ListEmptyComponent={loading ? <LoadingView /> : <EmptyState text={error || "Партнёров нет"} />}
+      />
+      <CreateArtistModal
+        visible={showCreateArtist}
+        onClose={() => setShowCreateArtist(false)}
+        onCreated={() => load(true)}
+      />
+    </>
+  );
+}
+
+function InlineNumberField({
+  label,
+  value,
+  placeholder,
+  onChange,
+  onSave,
+  saving,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (v: string) => void;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  return (
+    <View style={styles.inlineField}>
+      <Text style={styles.inlineLabel}>{label}</Text>
+      <View style={styles.inlineRow}>
+        <TextInput
+          value={value}
+          onChangeText={onChange}
+          placeholder={placeholder}
+          placeholderTextColor={colors.textMuted}
+          keyboardType="numeric"
+          style={styles.inlineInput}
+        />
+        <Button title="OK" variant="secondary" onPress={onSave} loading={saving} />
+      </View>
+    </View>
+  );
+}
+
+function CreateArtistModal({
+  visible,
+  onClose,
+  onCreated,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [form, setForm] = useState({ name: "", email: "", password: "", slug: "", artistRate: "", commissionOverride: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const create = async () => {
+    if (!form.name.trim() || !form.email.trim() || form.password.length < 6 || !form.slug.trim()) {
+      setError("Заполните имя, email, пароль (≥6) и slug");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await apiPost("/admin/partners/create-artist", {
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        password: form.password,
+        slug: form.slug.trim().toLowerCase(),
+        artistRate: form.artistRate === "" ? undefined : Number(form.artistRate),
+        commissionOverride: form.commissionOverride === "" ? undefined : Number(form.commissionOverride),
+      });
+      setForm({ name: "", email: "", password: "", slug: "", artistRate: "", commissionOverride: "" });
+      onClose();
+      onCreated();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable style={styles.sheet} onPress={() => {}}>
+          <View style={styles.sheetHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sheetTitle}>Создать артиста вручную</Text>
+              <Text style={styles.sheetSubtitle}>Аккаунт партнёра-артиста</Text>
+            </View>
+            <Pressable onPress={onClose} hitSlop={8}>
+              <Ionicons name="close" size={22} color={colors.textMuted} />
+            </Pressable>
+          </View>
+          <ScrollView style={styles.sheetScroll} contentContainerStyle={styles.sheetBody}>
+            <InlineError text={error} />
+            <Field label="Имя / название" value={form.name} onChangeText={(v) => setForm((f) => ({ ...f, name: v }))} />
+            <Field label="Email" value={form.email} onChangeText={(v) => setForm((f) => ({ ...f, email: v }))} autoCapitalize="none" keyboardType="email-address" />
+            <Field label="Пароль (минимум 6 символов)" value={form.password} onChangeText={(v) => setForm((f) => ({ ...f, password: v }))} secureTextEntry />
+            <Field label="Slug" value={form.slug} onChangeText={(v) => setForm((f) => ({ ...f, slug: v }))} autoCapitalize="none" />
+            <Field label="% артиста" value={form.artistRate} onChangeText={(v) => setForm((f) => ({ ...f, artistRate: v }))} keyboardType="numeric" />
+            <Field label="% комиссии (пусто = глобальная)" value={form.commissionOverride} onChangeText={(v) => setForm((f) => ({ ...f, commissionOverride: v }))} keyboardType="numeric" />
+            <Button title="Создать артиста" onPress={create} loading={busy} icon="person-add-outline" />
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -279,7 +523,7 @@ function PayoutsList() {
                   </Text>
                 </View>
                 <Text style={styles.amount}>{formatRub(item.amount)}</Text>
-                <Badge tone={statusTone(item.status)}>{item.status || "—"}</Badge>
+                <Badge tone={statusTone(item.status)}>{payoutStatusLabel(item.status)}</Badge>
               </View>
             </Pressable>
             {expanded ? (
@@ -322,7 +566,6 @@ function CommissionsList() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
 
-  // Payout creation form
   const [payoutForm, setPayoutForm] = useState({
     method: "",
     recipientName: "",
@@ -455,110 +698,12 @@ function CommissionsList() {
                 </Text>
               </View>
               <Text style={styles.amount}>{formatRub(item.commissionAmount)}</Text>
-              <Badge tone={statusTone(item.status)}>{item.status || "—"}</Badge>
+              <Badge tone={statusTone(item.status)}>{commissionStatusLabel(item.status)}</Badge>
             </View>
           </Pressable>
         );
       }}
       ListEmptyComponent={loading ? <LoadingView /> : <EmptyState text={error || "Комиссий нет"} />}
-    />
-  );
-}
-
-function ArtistsList() {
-  const [artists, setArtists] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [form, setForm] = useState({ name: "", email: "", password: "", slug: "", artistRate: "", commissionOverride: "" });
-  const [busy, setBusy] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await apiGet<{ artists: any[] }>("/admin/partners/artists");
-      setArtists(data.artists || []);
-    } catch (e) {
-      setError(getErrorMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const create = async () => {
-    if (!form.name.trim() || !form.email.trim() || form.password.length < 6 || !form.slug.trim()) {
-      setError("Заполните имя, email, пароль (≥6) и slug");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await apiPost("/admin/partners/create-artist", {
-        name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
-        password: form.password,
-        slug: form.slug.trim().toLowerCase(),
-        artistRate: form.artistRate === "" ? 0 : Number(form.artistRate),
-        commissionOverride: form.commissionOverride === "" ? null : Number(form.commissionOverride),
-      });
-      setForm({ name: "", email: "", password: "", slug: "", artistRate: "", commissionOverride: "" });
-      load();
-    } catch (e) {
-      setError(getErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async (id: number) => {
-    setError("");
-    try {
-      await apiDelete(`/admin/partners/${id}`);
-      load();
-    } catch (e) {
-      setError(getErrorMessage(e));
-    }
-  };
-
-  return (
-    <FlatList
-      data={artists}
-      keyExtractor={(a) => String(a.id)}
-      onRefresh={load}
-      refreshing={loading}
-      contentContainerStyle={styles.list}
-      ListHeaderComponent={
-        <Card style={styles.formCard}>
-          <SectionTitle>Новый артист</SectionTitle>
-          <InlineError text={error} />
-          <Field label="Имя" value={form.name} onChangeText={(v) => setForm((f) => ({ ...f, name: v }))} />
-          <Field label="Email" value={form.email} onChangeText={(v) => setForm((f) => ({ ...f, email: v }))} autoCapitalize="none" keyboardType="email-address" />
-          <Field label="Пароль" value={form.password} onChangeText={(v) => setForm((f) => ({ ...f, password: v }))} secureTextEntry />
-          <Field label="Slug" value={form.slug} onChangeText={(v) => setForm((f) => ({ ...f, slug: v }))} autoCapitalize="none" />
-          <Field label="% артиста" value={form.artistRate} onChangeText={(v) => setForm((f) => ({ ...f, artistRate: v }))} keyboardType="numeric" />
-          <Field label="% комиссии" value={form.commissionOverride} onChangeText={(v) => setForm((f) => ({ ...f, commissionOverride: v }))} keyboardType="numeric" />
-          <Button title="Создать артиста" onPress={create} loading={busy} icon="add" />
-        </Card>
-      }
-      renderItem={({ item }) => (
-        <View style={styles.partnerCard}>
-          <View style={styles.partnerHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title}>{item.storeName || item.contactName || item.partnerSlug}</Text>
-              <Text style={styles.sub}>{item.contactEmail}</Text>
-              <Text style={styles.sub}>Ставка: {item.artistRate ?? 0}%</Text>
-            </View>
-            <Pressable onPress={() => remove(item.id)} hitSlop={8}>
-              <Text style={styles.delete}>Удалить</Text>
-            </Pressable>
-          </View>
-        </View>
-      )}
-      ListEmptyComponent={loading ? <LoadingView /> : <EmptyState text={error || "Артистов нет"} />}
     />
   );
 }
@@ -646,10 +791,11 @@ function DetailRow({ label, value }: { label: string; value?: string | number | 
   );
 }
 
-function statusTone(s?: string): "success" | "danger" | "warning" | "neutral" {
+function statusTone(s?: string): "success" | "danger" | "warning" | "neutral" | "info" {
   if (s === "approved" || s === "paid" || s === "completed") return "success";
   if (s === "rejected" || s === "cancelled") return "danger";
   if (s === "pending" || s === "awaiting_invoice" || s === "invoice_uploaded") return "warning";
+  if (s === "blocked") return "neutral";
   return "neutral";
 }
 
@@ -684,32 +830,86 @@ const styles = StyleSheet.create({
   tabText: { color: colors.textMuted, fontWeight: "600", fontSize: 12 },
   tabTextActive: { color: colors.white },
   list: { paddingBottom: spacing.xxl },
-  partnerCard: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+  headerBlock: { padding: spacing.lg, gap: spacing.md },
+  filterRow: { flexDirection: "row", gap: spacing.sm },
+  filterChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
-  partnerHeader: {
+  filterChipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  filterChipText: { color: colors.textMuted, fontSize: 12, fontWeight: "600" },
+  filterChipTextOn: { color: colors.white },
+  toolbar: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
+  searchWrap: {
+    flex: 1,
+    minWidth: 160,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
+    backgroundColor: colors.surfaceAlt,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
   },
+  searchInput: { flex: 1, color: colors.text, paddingVertical: spacing.sm, fontSize: 14 },
+  partnerCard: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  partnerHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+  },
+  partnerTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, flexWrap: "wrap" },
+  statusCol: { alignItems: "flex-end", gap: spacing.sm },
+  emailLine: { color: colors.text, fontSize: 13 },
+  emailOk: { color: colors.success, fontSize: 11 },
+  emailWarn: { color: colors.warning, fontSize: 11 },
+  code: { color: colors.textMuted, fontSize: 12, fontFamily: "monospace", marginTop: 2 },
   statsRow: {
     flexDirection: "row",
     gap: spacing.lg,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
   stat: {},
   statValue: { color: colors.text, fontSize: 14, fontWeight: "700" },
   statLabel: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  inlineForm: { gap: spacing.sm },
+  inlineField: {},
+  inlineLabel: { color: colors.textMuted, fontSize: 12, marginBottom: spacing.xs },
+  inlineRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
+  inlineInput: {
+    flex: 1,
+    backgroundColor: colors.surfaceAlt,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 14,
+  },
+  artistEmpty: { color: colors.textMuted, fontSize: 12 },
   actions: {
     flexDirection: "row",
     gap: spacing.sm,
-    marginTop: spacing.md,
+    flexWrap: "wrap",
+    marginTop: spacing.xs,
   },
   detail: {
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
@@ -725,31 +925,7 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: 15, fontWeight: "600" },
   sub: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   amount: { color: colors.accent, fontSize: 14, fontWeight: "700" },
-  inlineForm: { marginTop: spacing.md },
   formLabel: { color: colors.textMuted, fontSize: 12, marginTop: spacing.md, marginBottom: spacing.xs },
-  inlineRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
-  input: {
-    flex: 1,
-    backgroundColor: colors.surfaceAlt,
-    borderColor: colors.border,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    color: colors.text,
-  },
-  toggleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  toggleLabel: { color: colors.text, fontSize: 14 },
-  toggle: { width: 46, height: 26, borderRadius: 13, backgroundColor: colors.surfaceAlt, padding: 3 },
-  toggleOn: { backgroundColor: colors.success },
-  dot: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.textMuted },
-  dotOn: { backgroundColor: colors.white, alignSelf: "flex-end" },
   bulkCard: { margin: spacing.lg },
   bulkActions: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap", marginBottom: spacing.md },
   check: {
@@ -762,7 +938,29 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   checkOn: { backgroundColor: colors.accent, borderColor: colors.accent },
-  delete: { color: colors.danger, fontSize: 13 },
-  formCard: { margin: spacing.lg },
   pad: { padding: spacing.lg },
+  backdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    maxHeight: "92%",
+    overflow: "hidden",
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  sheetTitle: { color: colors.text, fontSize: 16, fontWeight: "700" },
+  sheetSubtitle: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+  sheetScroll: { flexGrow: 0 },
+  sheetBody: { padding: spacing.lg, gap: spacing.sm },
 });

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Button, Card } from "./ui";
+import { Button, Card, Field } from "./ui";
 import { SelectField } from "./SelectField";
 import {
   subcategoriesFor,
@@ -114,15 +114,23 @@ function AdditionalRow({
             placeholder="Выберите категорию"
             onChange={(v) => onChange({ category: v, subcategory: "", subSubcategory: "" })}
           />
-          <SelectField
-            label="Подкатегория"
-            value={value.subcategory}
-            options={subs.map((s) => ({ value: s.name, label: s.name }))}
-            placeholder="Все"
-            allowEmpty={false}
-            onChange={(v) => onChange({ subcategory: v, subSubcategory: "" })}
-          />
-          {subSubs.length > 0 ? (
+          {subs.length > 0 ? (
+            <SelectField
+              label="Подкатегория"
+              value={value.subcategory}
+              options={subs.map((s) => ({ value: s.name, label: s.name }))}
+              placeholder="Все"
+              onChange={(v) => onChange({ subcategory: v || "", subSubcategory: "" })}
+            />
+          ) : (
+            <Field
+              label="Подкатегория"
+              value={value.subcategory}
+              onChangeText={(v) => onChange({ subcategory: v, subSubcategory: "" })}
+              placeholder="Футболки"
+            />
+          )}
+          {subSubs.length > 0 && value.subcategory ? (
             <SelectField
               label="Под-подкатегория"
               value={value.subSubcategory || ""}

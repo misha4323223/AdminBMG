@@ -116,6 +116,16 @@ function FaqEditor({
 
   const remove = (i: number) => setItems((prev) => prev.filter((_, idx) => idx !== i));
 
+  const move = (i: number, dir: -1 | 1) => {
+    const to = i + dir;
+    if (to < 0 || to >= items.length) return;
+    setItems((prev) => {
+      const next = [...prev];
+      [next[i], next[to]] = [next[to], next[i]];
+      return next;
+    });
+  };
+
   return (
     <View style={styles.editor}>
       <SectionTitle>Вопросы и ответы</SectionTitle>
@@ -123,9 +133,27 @@ function FaqEditor({
         <Card key={i} style={styles.faqCard}>
           <View style={styles.faqHeader}>
             <Text style={styles.faqIndex}>#{i + 1}</Text>
-            <Pressable onPress={() => remove(i)} hitSlop={8}>
-              <Ionicons name="trash-outline" size={18} color={colors.danger} />
-            </Pressable>
+            <View style={styles.faqHeaderActions}>
+              <Pressable
+                onPress={() => move(i, -1)}
+                disabled={i === 0}
+                hitSlop={8}
+                style={[styles.faqMoveBtn, i === 0 && styles.faqMoveDisabled]}
+              >
+                <Ionicons name="chevron-up" size={16} color={i === 0 ? colors.textMuted : colors.text} />
+              </Pressable>
+              <Pressable
+                onPress={() => move(i, 1)}
+                disabled={i === items.length - 1}
+                hitSlop={8}
+                style={[styles.faqMoveBtn, i === items.length - 1 && styles.faqMoveDisabled]}
+              >
+                <Ionicons name="chevron-down" size={16} color={i === items.length - 1 ? colors.textMuted : colors.text} />
+              </Pressable>
+              <Pressable onPress={() => remove(i)} hitSlop={8}>
+                <Ionicons name="trash-outline" size={18} color={colors.danger} />
+              </Pressable>
+            </View>
           </View>
           <Field label="Вопрос" value={it.question} onChangeText={(v) => update(i, { question: v })} />
           <Field label="Ответ" value={it.answer} onChangeText={(v) => update(i, { answer: v })} multiline />
@@ -262,6 +290,16 @@ const styles = StyleSheet.create({
   body: { padding: spacing.lg, paddingBottom: spacing.xxl },
   editor: {},
   faqCard: { marginBottom: spacing.md },
+  faqHeaderActions: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  faqMoveBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  faqMoveDisabled: { opacity: 0.4 },
   faqHeader: {
     flexDirection: "row",
     justifyContent: "space-between",

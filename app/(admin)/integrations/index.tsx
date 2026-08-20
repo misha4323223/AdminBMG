@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from "react";
+import * as Linking from "expo-linking";
+import * as ImagePicker from "expo-image-picker";
+import { Image } from "expo-image";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Screen } from "@/components/Screen";
 import {
@@ -10,7 +13,7 @@ import {
   InlineError,
   SectionTitle,
 } from "@/components/ui";
-import { apiGet, apiPost, getErrorMessage } from "@/lib/api";
+import { apiGet, apiPost, getErrorMessage, uploadImage } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { colors, spacing } from "@/constants/theme";
 
@@ -27,6 +30,7 @@ interface PushHistoryEntry {
 
 export default function IntegrationsScreen() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [tryon, setTryon] = useState<boolean | null>(null);
   const [ozon, setOzon] = useState<Record<string, unknown> | null>(null);
   const [pushTotal, setPushTotal] = useState<number | null>(null);
   const [adminPush, setAdminPush] = useState<Record<string, unknown> | null>(null);
@@ -37,19 +41,22 @@ export default function IntegrationsScreen() {
   // Push send form
   const [pushForm, setPushForm] = useState({ title: "", body: "", url: "", image: "" });
   const [sending, setSending] = useState(false);
+  const [uploadingPushImage, setUploadingPushImage] = useState(false);
   const [result, setResult] = useState("");
 
   const load = async () => {
     setError("");
     try {
-      const [sync, ozonData, pushData, adminPushData, historyData] = await Promise.all([
+      const [sync, tryonData, ozonData, pushData, adminPushData, historyData] = await Promise.all([
         apiGet<{ enabled: boolean }>("/admin/1c-sync-status"),
+        apiGet<{ enabled: boolean }>("/admin/virtual-tryon/settings").catch(() => null),
         apiGet<Record<string, unknown>>("/admin/ozon-delivery/settings").catch(() => null),
         apiGet<{ total: number }>("/admin/push/stats").catch(() => null),
         apiGet<Record<string, unknown>>("/admin/push/admin-stats").catch(() => null),
         apiGet<PushHistoryEntry[]>("/admin/push/history").catch(() => []),
       ]);
       setEnabled(sync.enabled);
+      setTryon(tryonData?.enabled ?? null);
       setOzon(ozonData);
       setPushTotal(pushData?.total ?? null);
       setAdminPush(adminPushData);
@@ -76,6 +83,74 @@ export default function IntegrationsScreen() {
     }
   };
 
+  const toggleTryon = async () => {
+    if (tryon == null) return;
+    setBusy(true);
+    try {
+      const res = await apiPost<{ enabled: boolean }>("/admin/virtual-tryon/settings", { enabled: !tryon });
+      setTryon(res.enabled);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleOzon = async () => {
+    const current = !!(ozon as any)?.enabled;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await apiPost<Record<string, unknown>>("/admin/ozon-delivery/settings", { enabled: !current });
+      setOzon(next);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connectOzon = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await apiGet<{ authUrl?: string; error?: string }>("/admin/ozon-oauth/authorize");
+      if (!res.authUrl) throw new Error(res.error || "Не удалось получить ссылку Ozon");
+      await Linking.openURL(res.authUrl);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reloadOzon = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await apiPost<{ success?: boolean; error?: string }>("/admin/ozon-oauth/reload");
+      if (!res.success) throw new Error(res.error || "Токены Ozon не найдены");
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revokeOzon = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await apiPost("/admin/ozon-oauth/revoke");
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const flushCache = async () => {
     setBusy(true);
     try {
@@ -84,6 +159,27 @@ export default function IntegrationsScreen() {
       setError(getErrorMessage(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const pickPushImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setError("Нужен доступ к фото");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.9 });
+    if (result.canceled || !result.assets?.[0]) return;
+    setUploadingPushImage(true);
+    setError("");
+    try {
+      const asset = result.assets[0];
+      const url = await uploadImage(asset.uri, asset.fileName || undefined);
+      setPushForm((form) => ({ ...form, image: url }));
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setUploadingPushImage(false);
     }
   };
 
@@ -146,19 +242,62 @@ export default function IntegrationsScreen() {
       </Card>
 
       <Card style={styles.card}>
-        <SectionTitle>Ozon Delivery</SectionTitle>
-        {ozon ? (
-          <View>
-            {Object.entries(ozon).map(([k, v]) => (
-              <View key={k} style={styles.kvRow}>
-                <Text style={styles.kvKey}>{k}</Text>
-                <Text style={styles.kvValue}>{String(v)}</Text>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <Text style={styles.desc}>Не настроено</Text>
-        )}
+        <SectionTitle>АР-примерка (Virtual Try-On)</SectionTitle>
+        <View style={styles.rowBetween}>
+          <Text style={styles.desc}>
+            {tryon == null
+              ? "Проверка…"
+              : tryon
+                ? "Кнопка «Примерить» видна покупателям"
+                : "Кнопка «Примерить» скрыта"}
+          </Text>
+          <Pressable
+            onPress={toggleTryon}
+            disabled={busy || tryon == null}
+            style={[styles.toggle, tryon && styles.toggleOn]}
+          >
+            <View style={[styles.dot, tryon && styles.dotOn]} />
+          </Pressable>
+        </View>
+      </Card>
+
+      <Card style={styles.card}>
+        <View style={styles.sectionHeader}>
+          <SectionTitle>Ozon Delivery</SectionTitle>
+          <Badge tone={(ozon as any)?.serviceReady ? "success" : (ozon as any)?.oauthStatus?.authenticated ? "warning" : "neutral"}>
+            {(ozon as any)?.serviceReady
+              ? "активна"
+              : (ozon as any)?.oauthStatus?.authenticated
+                ? "авторизована"
+                : "не настроена"}
+          </Badge>
+        </View>
+        <Text style={styles.desc}>
+          Покупатель сможет выбрать доставку Ozon и пункт выдачи при оформлении заказа.
+        </Text>
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>OAuth</Text>
+          <Text style={styles.kvValue}>{(ozon as any)?.oauthStatus?.authenticated ? "подключён" : "не подключён"}</Text>
+        </View>
+        <View style={styles.kvRow}>
+          <Text style={styles.kvKey}>Показывать в оформлении</Text>
+          <Text style={styles.kvValue}>{(ozon as any)?.enabled ? "да" : "нет"}</Text>
+        </View>
+        <View style={styles.integrationActions}>
+          <Button
+            title={(ozon as any)?.enabled ? "Отключить" : "Включить"}
+            variant={(ozon as any)?.enabled ? "secondary" : "primary"}
+            onPress={toggleOzon}
+            loading={busy}
+            disabled={!ozon}
+            icon="power-outline"
+          />
+          <Button title="Авторизовать" variant="secondary" onPress={connectOzon} loading={busy} icon="log-in-outline" />
+          <Button title="Обновить статус" variant="ghost" onPress={reloadOzon} loading={busy} icon="refresh-outline" />
+          {(ozon as any)?.oauthStatus?.authenticated ? (
+            <Button title="Отключить OAuth" variant="danger" onPress={revokeOzon} loading={busy} icon="close-outline" />
+          ) : null}
+        </View>
       </Card>
 
       <Card style={styles.card}>
@@ -176,7 +315,15 @@ export default function IntegrationsScreen() {
           <Field label="Заголовок" value={pushForm.title} onChangeText={(v) => setPushForm((f) => ({ ...f, title: v }))} />
           <Field label="Текст" value={pushForm.body} onChangeText={(v) => setPushForm((f) => ({ ...f, body: v }))} multiline />
           <Field label="Ссылка (url)" value={pushForm.url} onChangeText={(v) => setPushForm((f) => ({ ...f, url: v }))} autoCapitalize="none" />
-          <Field label="Картинка (url)" value={pushForm.image} onChangeText={(v) => setPushForm((f) => ({ ...f, image: v }))} autoCapitalize="none" />
+          <Field label="Картинка (URL)" value={pushForm.image} onChangeText={(v) => setPushForm((f) => ({ ...f, image: v }))} autoCapitalize="none" />
+          <Button
+            title={uploadingPushImage ? "Загрузка…" : "Выбрать картинку из галереи"}
+            variant="secondary"
+            onPress={pickPushImage}
+            loading={uploadingPushImage}
+            icon="image-outline"
+          />
+          {pushForm.image ? <Image source={{ uri: pushForm.image }} style={styles.pushPreview} contentFit="cover" /> : null}
           {result ? <Text style={styles.result}>{result}</Text> : null}
           <View style={styles.pushActions}>
             <Button title="Отправить всем" onPress={() => sendPush(false)} loading={sending} icon="paper-plane" />
@@ -237,7 +384,10 @@ const styles = StyleSheet.create({
   },
   kvKey: { color: colors.textMuted, fontSize: 12, flex: 1 },
   kvValue: { color: colors.text, fontSize: 12, textAlign: "right", flexShrink: 1 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+  integrationActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
   pushForm: { marginTop: spacing.md },
+  pushPreview: { width: "100%", height: 120, borderRadius: 8, marginBottom: spacing.md, backgroundColor: colors.surfaceAlt },
   pushActions: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   result: { color: colors.success, fontSize: 13, marginBottom: spacing.sm },
   historyTitle: { color: colors.text, fontSize: 14, fontWeight: "700", marginTop: spacing.lg, marginBottom: spacing.sm },

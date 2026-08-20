@@ -67,6 +67,8 @@ export function orderStatusLabel(status?: string | null): string {
   switch ((status || "").toLowerCase()) {
     case "new":
       return "Новый";
+    case "pending":
+      return "Ожидает оплаты";
     case "paid":
       return "Оплачен";
     case "processing":
@@ -83,5 +85,142 @@ export function orderStatusLabel(status?: string | null): string {
       return "Черновик";
     default:
       return status || "—";
+  }
+}
+
+/** Статус партнёра (заявка на участие). */
+export function partnerStatusLabel(status?: string | null): string {
+  switch ((status || "").toLowerCase()) {
+    case "pending":
+      return "На модерации";
+    case "approved":
+      return "Одобрен";
+    case "rejected":
+      return "Отклонён";
+    case "blocked":
+      return "Заблокирован";
+    default:
+      return status || "—";
+  }
+}
+
+/** Юридический статус партнёра. */
+export function legalStatusLabel(status?: string | null): string {
+  switch ((status || "").toLowerCase()) {
+    case "self_employed":
+      return "Самозанятый";
+    case "ip":
+      return "ИП";
+    case "ooo":
+      return "Юр. лицо";
+    default:
+      return status || "—";
+  }
+}
+
+/** Статус выплаты партнёру. */
+export function payoutStatusLabel(status?: string | null): string {
+  switch ((status || "").toLowerCase()) {
+    case "awaiting_invoice":
+      return "Ждём счёт";
+    case "invoice_uploaded":
+      return "Счёт получен";
+    case "paid_pending_receipt":
+      return "Оплачено, ждём чек";
+    case "paid_pending_act":
+      return "Оплачено, ждём акт";
+    case "completed":
+      return "Завершено";
+    case "rejected":
+      return "Отклонено";
+    default:
+      return status || "—";
+  }
+}
+
+/** Статус комиссии партнёра. */
+export function commissionStatusLabel(status?: string | null): string {
+  switch ((status || "").toLowerCase()) {
+    case "confirmed":
+      return "Готово к выплате";
+    case "paid":
+      return "Выплачено";
+    case "cancelled":
+      return "Отменено";
+    case "pending":
+      return "Ожидает оплаты";
+    default:
+      return status || "—";
+  }
+}
+
+/** Статус подарочного сертификата. */
+export function giftCardStatusLabel(status?: string | null): string {
+  switch ((status || "").toLowerCase()) {
+    case "active":
+      return "Активен";
+    case "pending":
+      return "Ожидает";
+    case "used":
+      return "Использован";
+    case "expired":
+      return "Истёк";
+    default:
+      return status || "—";
+  }
+}
+
+/** Статус предзаказа (в т.ч. оптового). */
+export function preorderStatusLabel(status?: string | null): string {
+  switch ((status || "").toLowerCase()) {
+    case "production":
+      return "В производстве";
+    case "shipping":
+      return "Отправка";
+    case "shipped":
+      return "Отправлено";
+    case "cancelled":
+      return "Отменено";
+    case "pending":
+      return "Ожидает";
+    case "collecting":
+      return "Сбор заказов";
+    case "completed":
+      return "Завершено";
+    default:
+      return status || "—";
+  }
+}
+
+/** Человекочитаемая подпись типа страницы в SEO-списке. */
+export function seoPageTypeLabel(type?: string | null): string {
+  switch ((type || "").toLowerCase()) {
+    case "home":
+      return "Главная";
+    case "product":
+      return "Товар";
+    case "categories":
+      return "Категории";
+    case "artist":
+    case "artist_pages":
+      return "Артист";
+    case "blog":
+    case "blog_pages":
+      return "Блог";
+    case "static":
+    case "static_pages":
+      return "Статичная";
+    case "vacancies":
+      return "Вакансии";
+    case "concept":
+      return "Концепт";
+    case "checkout":
+      return "Оформление";
+    case "navbar":
+      return "Навбар";
+    case "footer":
+      return "Футер";
+    default:
+      return type || "";
   }
 }

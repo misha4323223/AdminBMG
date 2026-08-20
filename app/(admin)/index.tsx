@@ -19,10 +19,12 @@ export default function Dashboard() {
   useEffect(() => {
     (async () => {
       try {
-        const products = await apiGet<{ products: unknown[]; total?: number }>(
-          "/products?limit=1&admin=true",
-        );
-        setProductsCount(products.total ?? products.products?.length ?? 0);
+        const products = await apiGet<{
+          products: unknown[];
+          total?: number;
+          pagination?: { total?: number };
+        }>("/products?limit=1&admin=true");
+        setProductsCount(products.pagination?.total ?? products.total ?? products.products?.length ?? 0);
       } catch {}
       try {
         const orders = await apiGet<unknown[]>("/admin/orders");
@@ -39,6 +41,7 @@ export default function Dashboard() {
     <Screen
       title="Админ-панель"
       subtitle={user ? `Вы вошли как ${user.name || user.email}` : undefined}
+      hideBack
       right={
         <Pressable onPress={logout} style={styles.logout} hitSlop={8}>
           <Ionicons name="log-out-outline" size={20} color={colors.textMuted} />

@@ -6,6 +6,7 @@ import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, InlineError, LoadingView, SectionTitle } from "@/components/ui";
 import { apiDelete, apiGet, apiPatch, apiPost, getErrorMessage } from "@/lib/api";
 import { formatDate, formatDateTime, formatRub, orderStatusLabel } from "@/lib/format";
+import { orderItemImage } from "@/lib/images";
 import type { Order } from "@/lib/types";
 import { colors, radius, spacing } from "@/constants/theme";
 
@@ -192,11 +193,17 @@ export default function OrderDetailScreen() {
         </View>
         {items.map((it, i) => (
           <View key={i} style={styles.item}>
-            <Image
-              source={{ uri: (it.image as string) || undefined }}
-              style={styles.itemImage}
-              contentFit="cover"
-            />
+            {orderItemImage(it) ? (
+              <Image
+                source={{ uri: orderItemImage(it) }}
+                style={styles.itemImage}
+                contentFit="cover"
+              />
+            ) : (
+              <View style={[styles.itemImage, styles.itemImageEmpty]}>
+                <Text style={styles.itemImagePlaceholder}>Нет фото</Text>
+              </View>
+            )}
             <View style={styles.itemBody}>
               <Text style={styles.itemName} numberOfLines={2}>
                 {it.name || `Товар #${it.productId}`}
@@ -351,6 +358,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.surfaceAlt,
   },
+  itemImageEmpty: { alignItems: "center", justifyContent: "center" },
+  itemImagePlaceholder: { color: colors.textMuted, fontSize: 8, textAlign: "center" },
   itemBody: {
     flex: 1,
   },

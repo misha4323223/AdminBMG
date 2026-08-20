@@ -18,6 +18,10 @@ interface ScreenProps {
   scroll?: boolean;
   children: React.ReactNode;
   headerExtra?: React.ReactNode;
+  /** Куда вернуться, если истории назад нет (например, после перезагрузки на вложенной странице). По умолчанию — главная админки. */
+  backTo?: string;
+  /** Полностью скрыть кнопку «Назад» (для корневых экранов вроде дашборда). */
+  hideBack?: boolean;
 }
 
 export function Screen({
@@ -26,17 +30,28 @@ export function Screen({
   right,
   scroll = true,
   headerExtra,
+  backTo = "/",
+  hideBack = false,
   children,
 }: ScreenProps) {
   const router = useRouter();
   const canGoBack = router.canGoBack();
+  const showBack = !hideBack;
+
+  const goBack = () => {
+    if (canGoBack) {
+      router.back();
+    } else {
+      router.replace(backTo);
+    }
+  };
 
   const header = (
     <View style={styles.header}>
       <View style={styles.headerRow}>
-        {canGoBack ? (
+        {showBack ? (
           <Pressable
-            onPress={() => router.back()}
+            onPress={goBack}
             style={styles.back}
             hitSlop={8}
             accessibilityRole="button"

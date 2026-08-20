@@ -211,18 +211,29 @@ export default function NewProductScreen() {
             setSubSubcategory("");
           }}
         />
-        <SelectField
-          label="Подкатегория"
-          value={subcategory}
-          options={subcategories.map((s) => ({ value: s.name, label: s.name }))}
-          placeholder="Без подкатегории"
-          allowEmpty={false}
-          onChange={(v) => {
-            setSubcategory(v);
-            setSubSubcategory("");
-          }}
-        />
-        {subSubs.length > 0 ? (
+        {subcategories.length > 0 ? (
+          <SelectField
+            label="Подкатегория"
+            value={subcategory}
+            options={subcategories.map((s) => ({ value: s.name, label: s.name }))}
+            placeholder="Без подкатегории"
+            onChange={(v) => {
+              setSubcategory(v || "");
+              setSubSubcategory("");
+            }}
+          />
+        ) : (
+          <Field
+            label="Подкатегория"
+            value={subcategory}
+            onChangeText={(v) => {
+              setSubcategory(v);
+              setSubSubcategory("");
+            }}
+            placeholder="Футболки"
+          />
+        )}
+        {subSubs.length > 0 && subcategory ? (
           <SelectField
             label="Под-подкатегория"
             value={subSubcategory}
@@ -252,12 +263,12 @@ export default function NewProductScreen() {
         <Field label="Характеристики (HTML)" value={specsHtml} onChangeText={setSpecsHtml} multiline />
       </Accordion>
 
-      <Accordion title="SEO и Look" icon="search-outline">
-        <Field label="SEO title" value={seoTitle} onChangeText={setSeoTitle} multiline />
-        <Field label="SEO description" value={seoDescription} onChangeText={setSeoDescription} multiline />
-        <Field label="SEO body (HTML)" value={seoBody} onChangeText={setSeoBody} multiline />
-        <Field label="Look: категория" value={lookCategory} onChangeText={setLookCategory} />
-        <Field label="Look: подкатегория" value={lookSubcategory} onChangeText={setLookSubcategory} />
+      <Accordion title="SEO и «Дополните образ»" icon="search-outline">
+        <Field label="SEO-заголовок" value={seoTitle} onChangeText={setSeoTitle} multiline />
+        <Field label="SEO-описание" value={seoDescription} onChangeText={setSeoDescription} multiline />
+        <Field label="SEO-текст (HTML)" value={seoBody} onChangeText={setSeoBody} multiline />
+        <Field label="Образ: категория" value={lookCategory} onChangeText={setLookCategory} />
+        <Field label="Образ: подкатегория" value={lookSubcategory} onChangeText={setLookSubcategory} />
         <Field label="Артист (slug)" value={artistSlug} onChangeText={setArtistSlug} autoCapitalize="none" />
         <SelectField
           label="Коллаборация (предзаказ)"

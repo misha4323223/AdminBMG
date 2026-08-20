@@ -1,7 +1,18 @@
-import React, { useEffect, useState } from "react";
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
+import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import {
+  Badge,
   Button,
   Card,
   EmptyState,
@@ -10,8 +21,9 @@ import {
   LoadingView,
   SectionTitle,
 } from "@/components/ui";
-import { apiGet, apiPost, getErrorMessage } from "@/lib/api";
-import { colors, spacing } from "@/constants/theme";
+import { apiGet, apiPost, getErrorMessage, uploadImage } from "@/lib/api";
+import { seoPageTypeLabel } from "@/lib/format";
+import { colors, radius, spacing } from "@/constants/theme";
 
 interface SeoPage {
   type: string;
@@ -24,11 +36,91 @@ interface SeoPage {
   hero?: Record<string, unknown>;
 }
 
+interface AuditProduct {
+  id: number;
+  slug: string;
+  name: string;
+  category: string;
+}
+
+interface AuditData {
+  products: {
+    total: number;
+    visible: number;
+    hidden: number;
+    withSeoTitle: number;
+    withSeoDesc: number;
+    withSeoBody: number;
+    withImage: number;
+    pctTitle: number;
+    pctDesc: number;
+    pctBody: number;
+    missingTitle: AuditProduct[];
+    missingDesc: AuditProduct[];
+    missingBody: AuditProduct[];
+  };
+}
+
+const SCHEMA_COVERAGE: Array<{ page: string; schemas: string[]; botSsr: boolean }> = [
+  { page: "Главная (/)", schemas: ["Organization", "WebSite", "SearchAction", "WebPage", "SpeakableSpecification"], botSsr: true },
+  { page: "Каталог (/products)", schemas: ["BreadcrumbList", "WebPage", "CollectionPage + ItemList"], botSsr: true },
+  { page: "Категория (/products/:cat)", schemas: ["BreadcrumbList", "WebPage", "ItemList с Product"], botSsr: true },
+  { page: "Товар (/:slug)", schemas: ["Product", "ImageObject[]", "BreadcrumbList", "WebPage", "SpeakableSpecification", "AggregateRating", "Review", "MerchantReturnPolicy", "OfferShippingDetails"], botSsr: true },
+  { page: "Артист (/@:slug)", schemas: ["BreadcrumbList", "WebPage", "Person"], botSsr: false },
+  { page: "Статья блога (/blog/:slug)", schemas: ["BlogPosting", "BreadcrumbList", "Person (author)"], botSsr: false },
+  { page: "Блог (/blog)", schemas: ["Blog", "BreadcrumbList"], botSsr: false },
+  { page: "Мерч на заказ (/merch-na-zakaz)", schemas: ["LocalBusiness", "Service", "HowTo", "FAQPage", "BreadcrumbList"], botSsr: true },
+  { page: "Статические страницы", schemas: ["WebPage", "BreadcrumbList"], botSsr: false },
+];
+
+const TECH_FIXES: Array<{ title: string; status: "fixed" | "ok"; desc: string }> = [
+  { title: "Дублирование JSON-LD", status: "fixed", desc: "Исправлено: атрибут data-rh=\"true\" — Helmet удаляет серверные теги при маунте." },
+  { title: "max-snippet / max-image-preview", status: "fixed", desc: "Добавлены директивы в robots meta для расширенных сниппетов в Google." },
+  { title: "Bot SSR для поисковиков", status: "fixed", desc: "Яндекс и Google получают полный HTML вместо пустого <div id='root'>." },
+  { title: "ImageObject (полная разметка)", status: "ok", desc: "Каждый товар передаёт изображения как ImageObject." },
+  { title: "SpeakableSpecification", status: "ok", desc: "Главная и страницы товаров разметили xpath для голосовых ассистентов." },
+  { title: "MerchantReturnPolicy + ShippingDetails", status: "ok", desc: "hasMerchantReturnPolicy (30-дневный возврат) и shippingDetails (СДЭК по России)." },
+];
+
+type SubTab = "settings" | "audit";
+
+const SECTION_ORDER: string[] = [
+  "home", "category", "subcategory", "subsubcategory", "artist",
+  "concept", "merch_order", "partner_register", "static",
+];
+
+const SECTION_META: Record<string, { label: string; icon: React.ComponentProps<typeof Ionicons>["name"] }> = {
+  home: { label: "Главная", icon: "home-outline" },
+  category: { label: "Категории", icon: "folder-outline" },
+  subcategory: { label: "Подкатегории", icon: "grid-outline" },
+  subsubcategory: { label: "Под-подкатегории", icon: "layers-outline" },
+  artist: { label: "Артисты", icon: "musical-notes-outline" },
+  concept: { label: "Pre-drop", icon: "cube-outline" },
+  merch_order: { label: "Мерч на заказ", icon: "bag-outline" },
+  partner_register: { label: "Партнёрская программа", icon: "people-outline" },
+  static: { label: "Информационные страницы", icon: "document-text-outline" },
+};
+
 export default function SeoScreen() {
+  const [subTab, setSubTab] = useState<SubTab>("settings");
+
+  return (
+    <Screen title="SEO" scroll={false}>
+      <View style={styles.tabs}>
+        <TabBtn label="Настройки" active={subTab === "settings"} onPress={() => setSubTab("settings")} />
+        <TabBtn label="Аудит" active={subTab === "audit"} onPress={() => setSubTab("audit")} />
+      </View>
+      {subTab === "audit" ? <AuditTab /> : <PagesList />}
+    </Screen>
+  );
+}
+
+function PagesList() {
   const [pages, setPages] = useState<SeoPage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<SeoPage | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -47,12 +139,26 @@ export default function SeoScreen() {
     load();
   }, []);
 
-  if (selected) {
+  const grouped = useMemo(() => {
+    const groups: Record<string, SeoPage[]> = {};
+    for (const type of SECTION_ORDER) groups[type] = [];
+    const q = query.trim().toLowerCase();
+    for (const p of pages) {
+      if (!groups[p.type]) groups[p.type] = [];
+      if (q && !p.label.toLowerCase().includes(q) && !p.key.toLowerCase().includes(q)) continue;
+      groups[p.type].push(p);
+    }
+    return groups;
+  }, [pages, query]);
+
+  const selectedPage = pages.find((p) => `${p.type}:${p.key}` === selectedKey) || null;
+
+  if (selectedPage) {
     return (
       <PageEditor
-        page={selected}
+        page={selectedPage}
         onBack={() => {
-          setSelected(null);
+          setSelectedKey(null);
           load();
         }}
       />
@@ -60,31 +166,54 @@ export default function SeoScreen() {
   }
 
   return (
-    <Screen title="SEO" scroll={false}>
-      <FlatList
-        data={pages}
-        keyExtractor={(p) => p.key}
-        onRefresh={load}
-        refreshing={loading}
-        contentContainerStyle={styles.list}
-        ListHeaderComponent={<InlineError text={error} />}
-        renderItem={({ item }) => (
-          <Pressable onPress={() => setSelected(item)} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title}>{item.label}</Text>
-              <Text style={styles.sub} numberOfLines={1}>
-                {item.fields?.title?.value || "—"}
-              </Text>
-              <Text style={styles.sub} numberOfLines={2}>
-                {item.fields?.description?.value || "—"}
-              </Text>
+    <ScrollView contentContainerStyle={styles.treeList} keyboardShouldPersistTaps="handled">
+      <InlineError text={error} />
+      <View style={styles.searchWrap}>
+        <Ionicons name="search" size={16} color={colors.textMuted} />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Поиск по названию или slug..."
+          placeholderTextColor={colors.textMuted}
+          style={styles.searchInput}
+        />
+      </View>
+      {loading ? (
+        <LoadingView />
+      ) : (
+        SECTION_ORDER.map((type) => {
+          const items = grouped[type] || [];
+          if (items.length === 0) return null;
+          const meta = SECTION_META[type];
+          return (
+            <View key={type} style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name={meta?.icon || "folder-outline"} size={14} color={colors.textMuted} />
+                <Text style={styles.sectionLabel}>{meta?.label || type}</Text>
+                <Badge tone="neutral">{items.length}</Badge>
+              </View>
+              {items.map((p) => {
+                const sel = `${p.type}:${p.key}` === selectedKey;
+                const hasTitle = !!p.fields?.title?.value;
+                return (
+                  <Pressable
+                    key={p.key}
+                    onPress={() => setSelectedKey(`${p.type}:${p.key}`)}
+                    style={[styles.pageRow, sel && styles.pageRowSelected]}
+                  >
+                    <View style={[styles.dot, hasTitle ? styles.dotOn : styles.dotOff]} />
+                    <Text style={[styles.pageLabel, sel && styles.pageLabelSelected]} numberOfLines={1}>
+                      {p.label}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
+                  </Pressable>
+                );
+              })}
             </View>
-            <Text style={styles.type}>{item.type}</Text>
-          </Pressable>
-        )}
-        ListEmptyComponent={loading ? <LoadingView /> : <EmptyState text={error || "Страниц нет"} />}
-      />
-    </Screen>
+          );
+        })
+      )}
+    </ScrollView>
   );
 }
 
@@ -99,6 +228,7 @@ function PageEditor({ page, onBack }: { page: SeoPage; onBack: () => void }) {
   const [saved, setSaved] = useState(false);
 
   const seoKey = pageKeyToSeoKey(page);
+  const titleLen = title.length;
 
   const save = async () => {
     setBusy(true);
@@ -128,33 +258,294 @@ function PageEditor({ page, onBack }: { page: SeoPage; onBack: () => void }) {
     }
   };
 
+  const pickHero = async (target: "desktop" | "mobile") => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setError("Нет доступа к галерее");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      base64: false,
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setBusy(true);
+    setError("");
+    try {
+      const url = await uploadImage(asset.uri, asset.fileName || undefined);
+      if (target === "desktop") setHeroImage(url);
+      else setHeroImageMobile(url);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <Screen title={page.label} subtitle={`SEO · ${page.type}`}>
-      <ScrollView contentContainerStyle={styles.pad}>
-        <InlineError text={error} />
-        {saved ? <Text style={styles.saved}>Сохранено ✓</Text> : null}
+    <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
+      <InlineError text={error} />
+      {saved ? <Text style={styles.saved}>Сохранено ✓</Text> : null}
 
-        <Card style={styles.card}>
-          <SectionTitle>Мета-теги</SectionTitle>
-          <Field label="Title" value={title} onChangeText={setTitle} multiline />
-          <Field label="Description" value={description} onChangeText={setDescription} multiline />
-        </Card>
-
-        {page.type === "home" ? (
-          <Card style={styles.card}>
-            <SectionTitle>Hero (главный слайд)</SectionTitle>
-            <Field label="Hero image (URL)" value={heroImage} onChangeText={setHeroImage} autoCapitalize="none" />
-            <Field label="Hero mobile (URL)" value={heroImageMobile} onChangeText={setHeroImageMobile} autoCapitalize="none" />
-            <Field label="Alt" value={heroImageAlt} onChangeText={setHeroImageAlt} />
-          </Card>
-        ) : null}
-
-        <Button title="Сохранить" onPress={save} loading={busy} icon="save-outline" />
-        <View style={styles.backWrap}>
-          <Button title="Назад" variant="ghost" onPress={onBack} />
+      <View style={styles.editorHeader}>
+        <Pressable onPress={onBack} hitSlop={8} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={18} color={colors.text} />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.editorTitle}>{page.label}</Text>
+          <Text style={styles.editorSubtitle}>SEO · {seoPageTypeLabel(page.type)}</Text>
         </View>
-      </ScrollView>
-    </Screen>
+      </View>
+
+      <Card style={styles.card}>
+        <SectionTitle>Мета-теги</SectionTitle>
+        <Text style={styles.hint}>Meta-теги этой страницы (title, description).</Text>
+        <Field
+          label={`Title (заголовок вкладки/страницы)`}
+          value={title}
+          onChangeText={setTitle}
+        />
+        <Text style={styles.charCount}>
+          {titleLen} символов (рекомендуется 50–70)
+        </Text>
+        <Field
+          label="Description (meta-описание)"
+          value={description}
+          onChangeText={setDescription}
+          multiline
+        />
+        <Text style={styles.charCount}>
+          {description.length} символов (рекомендуется 120–160)
+        </Text>
+      </Card>
+
+      {page.type === "home" ? (
+        <Card style={styles.card}>
+          <SectionTitle>Hero-баннер (картинка + alt-текст)</SectionTitle>
+          <Text style={styles.hint}>
+            Слайдер из 4 слайдов — здесь редактируется только 1-й (главный) слайд. Остальные слайды и их картинки — в разделе «Страницы → Главная».
+          </Text>
+
+          <View style={styles.heroSection}>
+            <Text style={styles.heroLabel}>Изображение (десктоп)</Text>
+            {heroImage ? (
+              <View style={styles.heroPreviewRow}>
+                <Image source={{ uri: heroImage }} style={styles.heroPreview} contentFit="cover" />
+                <View style={styles.heroActions}>
+                  <Button title="Заменить" variant="secondary" onPress={() => pickHero("desktop")} icon="image-outline" />
+                  <Button title="Убрать" variant="ghost" onPress={() => setHeroImage("")} icon="trash-outline" />
+                </View>
+              </View>
+            ) : (
+              <View>
+                <TextInput
+                  value={heroImage}
+                  onChangeText={setHeroImage}
+                  placeholder="URL изображения"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.heroInput}
+                  autoCapitalize="none"
+                />
+                <Button title="Загрузить из галереи" variant="secondary" onPress={() => pickHero("desktop")} icon="images-outline" />
+              </View>
+            )}
+          </View>
+
+          <View style={styles.heroSection}>
+            <Text style={styles.heroLabel}>Изображение (мобильная версия, опционально)</Text>
+            {heroImageMobile ? (
+              <View style={styles.heroPreviewRow}>
+                <Image source={{ uri: heroImageMobile }} style={styles.heroPreview} contentFit="cover" />
+                <View style={styles.heroActions}>
+                  <Button title="Заменить" variant="secondary" onPress={() => pickHero("mobile")} icon="image-outline" />
+                  <Button title="Убрать" variant="ghost" onPress={() => setHeroImageMobile("")} icon="trash-outline" />
+                </View>
+              </View>
+            ) : (
+              <View>
+                <TextInput
+                  value={heroImageMobile}
+                  onChangeText={setHeroImageMobile}
+                  placeholder="URL изображения"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.heroInput}
+                  autoCapitalize="none"
+                />
+                <Button title="Загрузить из галереи" variant="secondary" onPress={() => pickHero("mobile")} icon="images-outline" />
+              </View>
+            )}
+          </View>
+
+          <Field label="Alt-текст изображения" value={heroImageAlt} onChangeText={setHeroImageAlt} />
+          <Text style={styles.hint}>Помогает SEO и доступности — описывает, что изображено на баннере.</Text>
+        </Card>
+      ) : null}
+
+      <Button title="Сохранить" onPress={save} loading={busy} icon="save-outline" />
+      <View style={styles.backWrap}>
+        <Button title="Назад" variant="ghost" onPress={onBack} />
+      </View>
+    </ScrollView>
+  );
+}
+
+function AuditTab() {
+  const [data, setData] = useState<AuditData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [field, setField] = useState<"title" | "desc" | "body">("title");
+  const [query, setQuery] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await apiGet<AuditData>("/admin/seo-audit"));
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const p = data?.products;
+  const list =
+    field === "title"
+      ? p?.missingTitle
+      : field === "desc"
+        ? p?.missingDesc
+        : p?.missingBody;
+
+  const filtered =
+    list && query.trim()
+      ? list.filter(
+          (it) =>
+            it.name.toLowerCase().includes(query.toLowerCase()) ||
+            it.slug.toLowerCase().includes(query.toLowerCase()),
+        )
+      : list;
+
+  return (
+    <ScrollView contentContainerStyle={styles.pad}>
+      <InlineError text={error} />
+      <View style={styles.auditHeader}>
+        <Text style={styles.auditTitle}>SEO-аудит</Text>
+        <Button title="Обновить" variant="ghost" icon="refresh" onPress={load} loading={loading} />
+      </View>
+
+      <Card style={styles.card}>
+        <SectionTitle>Schema.org покрытие по типам страниц</SectionTitle>
+        {SCHEMA_COVERAGE.map((s) => (
+          <View key={s.page} style={styles.schemaRow}>
+            <Text style={styles.schemaLabel}>{s.page}</Text>
+            <Text style={styles.schemaValue}>{s.schemas.join(", ")}</Text>
+          </View>
+        ))}
+      </Card>
+
+      <Card style={styles.card}>
+        <SectionTitle>Технические исправления</SectionTitle>
+        {TECH_FIXES.map((fix) => (
+          <View key={fix.title} style={styles.fixRow}>
+            <Ionicons
+              name={fix.status === "fixed" ? "checkmark-circle" : "checkmark-circle-outline"}
+              size={16}
+              color={colors.success}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fixTitle}>{fix.title}</Text>
+              <Text style={styles.hint}>{fix.desc}</Text>
+            </View>
+          </View>
+        ))}
+      </Card>
+
+      {p ? (
+        <Card style={styles.card}>
+          <View style={styles.auditStatsRow}>
+            <StatBig label="Всего товаров" value={String(p.total)} />
+            <StatBig label="Видимых" value={String(p.visible)} />
+            <StatBig label="Скрытых / арт." value={String(p.hidden)} />
+            <StatBig label="С изображением" value={String(p.withImage)} />
+          </View>
+
+          <Text style={styles.auditBarLabel}>
+            seoTitle — {p.withSeoTitle} из {p.visible} видимых товаров
+          </Text>
+          <View style={styles.auditBar}>
+            <View style={[styles.auditBarFill, { width: `${p.pctTitle}%` }, p.pctTitle >= 80 ? styles.auditBarOk : p.pctTitle >= 40 ? styles.auditBarMid : styles.auditBarBad]} />
+          </View>
+          <Text style={styles.auditBarPct}>{p.pctTitle}%</Text>
+
+          <Text style={styles.auditBarLabel}>
+            seoDescription — {p.withSeoDesc} из {p.visible}
+          </Text>
+          <View style={styles.auditBar}>
+            <View style={[styles.auditBarFill, { width: `${p.pctDesc}%` }, p.pctDesc >= 80 ? styles.auditBarOk : p.pctDesc >= 40 ? styles.auditBarMid : styles.auditBarBad]} />
+          </View>
+          <Text style={styles.auditBarPct}>{p.pctDesc}%</Text>
+
+          <Text style={styles.auditBarLabel}>
+            seoBody (SEO-текст) — {p.withSeoBody} из {p.visible}
+          </Text>
+          <View style={styles.auditBar}>
+            <View style={[styles.auditBarFill, { width: `${p.pctBody}%` }, p.pctBody >= 80 ? styles.auditBarOk : p.pctBody >= 40 ? styles.auditBarMid : styles.auditBarBad]} />
+          </View>
+          <Text style={styles.auditBarPct}>{p.pctBody}%</Text>
+
+          <View style={styles.auditChips}>
+            <AuditChip label={`Без seoTitle (${p.missingTitle.length})`} active={field === "title"} onPress={() => setField("title")} />
+            <AuditChip label={`Без seoDesc (${p.missingDesc.length})`} active={field === "desc"} onPress={() => setField("desc")} />
+            <AuditChip label={`Без seoBody (${p.missingBody.length})`} active={field === "body"} onPress={() => setField("body")} />
+          </View>
+
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Поиск по названию или slug..."
+            placeholderTextColor={colors.textMuted}
+            style={styles.searchInput}
+          />
+
+          <View style={styles.auditTableHeader}>
+            <Text style={styles.auditTh}>Товар</Text>
+            <Text style={styles.auditThRight}>Категория</Text>
+          </View>
+          {filtered?.map((it) => (
+            <View key={it.id} style={styles.auditRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.title} numberOfLines={1}>{it.name}</Text>
+                <Text style={styles.sub} numberOfLines={1}>/{it.slug}</Text>
+              </View>
+              <Text style={styles.auditCategory}>{it.category}</Text>
+            </View>
+          ))}
+        </Card>
+      ) : null}
+    </ScrollView>
+  );
+}
+
+function AuditChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.auditChip, active && styles.auditChipActive]}>
+      <Text style={[styles.auditChipText, active && styles.auditChipTextActive]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function StatBig({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.statBig}>
+      <Text style={styles.statBigValue}>{value}</Text>
+      <Text style={styles.statBigLabel}>{label}</Text>
+    </View>
   );
 }
 
@@ -173,27 +564,165 @@ function pageKeyToSeoKey(page: SeoPage): string | null {
       return `subsubcategory:${page.key}`;
     case "static":
       return `static:${page.key}`;
+    case "artist":
+      return null; // saved separately
     default:
       return null;
   }
 }
 
+function TabBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.tab, active && styles.tabActive]}>
+      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  list: { paddingBottom: spacing.xxl },
-  row: {
+  tabs: { flexDirection: "row", gap: spacing.sm, padding: spacing.lg },
+  tab: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  tabActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  tabText: { color: colors.textMuted, fontWeight: "600", fontSize: 13 },
+  tabTextActive: { color: colors.white },
+  treeList: { paddingBottom: spacing.xxl, paddingHorizontal: spacing.lg },
+  searchWrap: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceAlt,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  searchInput: { flex: 1, color: colors.text, fontSize: 14, paddingVertical: spacing.sm },
+  section: { marginBottom: spacing.md },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  title: { color: colors.text, fontSize: 15, fontWeight: "600" },
-  sub: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
-  type: { color: colors.textMuted, fontSize: 11, textTransform: "uppercase" },
-  pad: { padding: spacing.lg },
-  card: { marginBottom: spacing.lg },
-  saved: { color: colors.success, fontSize: 13, marginBottom: spacing.sm },
+  sectionLabel: { color: colors.textMuted, fontSize: 12, fontWeight: "700", flex: 1 },
+  pageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  pageRowSelected: { backgroundColor: colors.accentSoft, borderRadius: radius.sm },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  dotOn: { backgroundColor: colors.success },
+  dotOff: { backgroundColor: colors.textMuted + "44" },
+  pageLabel: { color: colors.text, fontSize: 14, flex: 1 },
+  pageLabelSelected: { color: colors.accent, fontWeight: "600" },
+  pad: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.md },
+  editorHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  backBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  editorTitle: { color: colors.text, fontSize: 16, fontWeight: "700" },
+  editorSubtitle: { color: colors.textMuted, fontSize: 12 },
+  card: { gap: spacing.sm },
+  hint: { color: colors.textMuted, fontSize: 11, lineHeight: 16 },
+  saved: { color: colors.success, fontSize: 13 },
+  charCount: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  heroSection: { marginTop: spacing.sm },
+  heroLabel: { color: colors.text, fontSize: 13, fontWeight: "600", marginBottom: spacing.xs },
+  heroInput: {
+    backgroundColor: colors.surfaceAlt,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 13,
+    marginBottom: spacing.sm,
+  },
+  heroPreviewRow: { flexDirection: "row", gap: spacing.md, alignItems: "center" },
+  heroPreview: {
+    width: 120,
+    height: 72,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceAlt,
+  },
+  heroActions: { gap: spacing.xs },
   backWrap: { marginTop: spacing.sm },
+  auditHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  auditTitle: { color: colors.text, fontSize: 18, fontWeight: "700" },
+  schemaRow: { paddingVertical: spacing.xs },
+  schemaLabel: { color: colors.text, fontSize: 13 },
+  schemaValue: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  fixRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start", paddingVertical: spacing.xs },
+  fixTitle: { color: colors.text, fontSize: 13, fontWeight: "500" },
+  auditStatsRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
+  statBig: { flex: 1, backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: spacing.sm, alignItems: "center" },
+  statBigValue: { color: colors.text, fontSize: 18, fontWeight: "700" },
+  statBigLabel: { color: colors.textMuted, fontSize: 10, marginTop: 2, textAlign: "center" },
+  auditBarLabel: { color: colors.text, fontSize: 12, marginTop: spacing.sm },
+  auditBar: { height: 8, backgroundColor: colors.surfaceAlt, borderRadius: 4, overflow: "hidden", marginTop: 4 },
+  auditBarFill: { height: "100%", borderRadius: 4 },
+  auditBarOk: { backgroundColor: colors.success },
+  auditBarMid: { backgroundColor: colors.warning },
+  auditBarBad: { backgroundColor: colors.danger },
+  auditBarPct: { color: colors.textMuted, fontSize: 11, textAlign: "right" },
+  auditChips: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, flexWrap: "wrap" },
+  auditChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  auditChipActive: { backgroundColor: colors.danger, borderColor: colors.danger },
+  auditChipText: { color: colors.textMuted, fontSize: 12 },
+  auditChipTextActive: { color: colors.white },
+  auditTableHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  auditTh: { color: colors.textMuted, fontSize: 12, fontWeight: "600" },
+  auditThRight: { color: colors.textMuted, fontSize: 12, fontWeight: "600" },
+  auditRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  auditCategory: { color: colors.textMuted, fontSize: 12 },
+  title: { color: colors.text, fontSize: 14, fontWeight: "600" },
+  sub: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
 });
