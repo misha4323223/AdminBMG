@@ -1,16 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   FlatList,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { AgentChat } from "@/components/AgentChat";
 import {
   Badge,
   Button,
@@ -197,130 +195,8 @@ export default function AiScreen() {
 }
 
 function ChatTab() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const scrollRef = useRef<ScrollView>(null);
-
-  const send = async () => {
-    const command = input.trim();
-    if (!command || busy) return;
-    setInput("");
-    setError("");
-    setMessages((m) => [...m, { role: "user", content: command }]);
-    setBusy(true);
-    try {
-      const history = messages
-        .filter((m) => !m.pendingWrite)
-        .slice(-10)
-        .map((m) => ({ role: m.role, content: m.content }));
-      const res = await apiPost<any>("/admin/agent/chat", { command, history });
-      if (res.type === "write") {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content: res.description || "Подтвердить операцию?",
-            pendingWrite: { tool: res.tool, params: res.params || {} },
-          },
-        ]);
-      } else {
-        setMessages((m) => [...m, { role: "assistant", content: res.text || "Готово" }]);
-      }
-    } catch (e) {
-      setError(getErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const execute = async (msg: ChatMessage) => {
-    if (!msg.pendingWrite) return;
-    setBusy(true);
-    setError("");
-    try {
-      const res = await apiPost<{ result: string }>("/admin/agent/execute", {
-        tool: msg.pendingWrite.tool,
-        params: msg.pendingWrite.params,
-      });
-      setMessages((m) =>
-        m.map((x) =>
-          x === msg
-            ? { role: "assistant", content: res.result || "Выполнено", pendingWrite: null }
-            : x,
-        ),
-      );
-    } catch (e) {
-      setError(getErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      <ScrollView
-        ref={scrollRef}
-        style={styles.flex}
-        contentContainerStyle={styles.chatContent}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-      >
-        <InlineError text={error} />
-        {messages.length === 0 ? (
-          <EmptyState text="Напишите команду агенту, например: «Покажи последние 10 заказов»" />
-        ) : (
-          messages.map((m, i) => (
-            <View
-              key={i}
-              style={[styles.bubbleWrap, m.role === "user" ? styles.bubbleUser : styles.bubbleAi]}
-            >
-              <View style={[styles.bubble, m.role === "user" ? styles.bubbleUserBg : styles.bubbleAiBg]}>
-                <Text style={styles.bubbleText}>{m.content}</Text>
-                {m.pendingWrite ? (
-                  <View style={styles.confirmRow}>
-                    <Button title="Выполнить" onPress={() => execute(m)} loading={busy} />
-                    <Button
-                      title="Отмена"
-                      variant="ghost"
-                      onPress={() =>
-                        setMessages((all) =>
-                          all.map((x) =>
-                            x === m ? { role: "assistant", content: "Отменено", pendingWrite: null } : x,
-                          ),
-                        )
-                      }
-                    />
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          ))
-        )}
-      </ScrollView>
-      <View style={styles.composer}>
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          placeholder="Команда для BOOOM AI…"
-          placeholderTextColor={colors.textMuted}
-          style={styles.composerInput}
-          multiline
-          onSubmitEditing={send}
-        />
-        <Button title="→" onPress={send} loading={busy} />
-      </View>
-    </KeyboardAvoidingView>
-  );
-}
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  pendingWrite?: { tool: string; params: Record<string, unknown> } | null;
+  // Чат вынесен в общий компонент — тот же экземпляр логики встроен на главную.
+  return <AgentChat />;
 }
 
 function QueueTab() {

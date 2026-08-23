@@ -8,6 +8,7 @@
     "web": "expo start --web",
     "preview": "CI=1 EXPO_NO_TELEMETRY=1 expo start --web --host lan",
     "export:web": "expo export --platform web",
+    "gen:fonts": "node scripts/generate-icon-font.mjs",
     "dist:win": "node scripts/build-win.mjs",
     "typecheck": "tsc --noEmit"
   },

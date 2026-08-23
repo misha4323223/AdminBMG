@@ -41,6 +41,26 @@ export async function storeToken(token: string): Promise<void> {
   } catch {}
 }
 
+/** Произвольные JSON-данные (история чата и т.п.). На web — localStorage,
+ * на нативе — SecureStore (лимит ~2 КБ на значение, вызывающий сам ужимает payload). */
+export async function getStoredJson(key: string): Promise<unknown | null> {
+  try {
+    const raw =
+      Platform.OS === "web" ? webGet(key) : await SecureStore.getItemAsync(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setStoredJson(key: string, value: unknown): Promise<void> {
+  try {
+    const raw = JSON.stringify(value);
+    if (Platform.OS === "web") webSet(key, raw);
+    else await SecureStore.setItemAsync(key, raw);
+  } catch {}
+}
+
 export async function getStoredApiKey(): Promise<string | null> {
   try {
     if (Platform.OS === "web") return webGet(API_KEY_KEY);

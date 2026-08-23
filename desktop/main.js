@@ -21,22 +21,53 @@ const MIME = {
   ".ttf": "font/ttf",
 };
 
-// Собираем приложение из web-сборки (dist), которую подкладывает build-win.mjs.
-// В unpackaged-режиме берём ../dist из корня проекта.
 function distDir() {
   return app.isPackaged
     ? path.join(__dirname, "dist")
     : path.join(__dirname, "..", "dist");
 }
 
-// Мини-статический сервер на 127.0.0.1 (только локально, порт случайный).
-// Нужен, чтобы web-сборка работала из под Electron (абсолютные пути /_expo/...).
+/**
+ * Читаем Ionicons TTF при запуске и создаём CSS с base64 data URI.
+ * Шрифт встраивается прямо в HTML — никаких сетевых запросов для загрузки шрифта.
+ * Expo-font тоже сможет его найти, т.к. @font-face зарегистрирован ДО любого JS.
+ */
+function buildIconFontCSS(root) {
+  const ttfPath = path.join(
+    root,
+    "assets",
+    "node_modules",
+    "@expo",
+    "vector-icons",
+    "build",
+    "vendor",
+    "react-native-vector-icons",
+    "Fonts",
+    "Ionicons.b4eb097d35f44ed943676fd56f6bdc51.ttf"
+  );
+  try {
+    const buf = fs.readFileSync(ttfPath);
+    const b64 = buf.toString("base64");
+    const dataUri = `data:font/sfnt;base64,${b64}`;
+    // Регистрируем под обоими именами — expo-font использует 'ionicons' (lowercase),
+    // а Some-компоненты могут использовать 'Ionicons'
+    return `<style id="electron-icon-font">\n@font-face{font-family:"ionicons";src:url("${dataUri}");font-weight:400;font-style:normal;font-display:swap;}\n@font-face{font-family:"Ionicons";src:url("${dataUri}");font-weight:400;font-style:normal;font-display:swap;}\n</style>`;
+  } catch (e) {
+    console.error("⚠️ Не удалось прочитать Ionicons.ttf:", e.message);
+    return "";
+  }
+}
+
 function startStaticServer() {
   const root = distDir();
+  const iconFontCSS = buildIconFontCSS(root);
+
   const server = http.createServer((req, res) => {
     let urlPath;
     try {
-      urlPath = decodeURIComponent(new URL(req.url, "http://127.0.0.1").pathname);
+      urlPath = decodeURIComponent(
+        new URL(req.url, "http://127.0.0.1").pathname
+      );
     } catch {
       res.writeHead(400);
       res.end();
@@ -53,10 +84,9 @@ function startStaticServer() {
 
     fs.stat(filePath, (err, stat) => {
       if (!err && stat.isFile()) {
-        serve(filePath, res);
+        serve(filePath, res, iconFontCSS);
       } else {
-        // SPA-fallback: любые неизвестные пути отдаём index.html
-        serve(path.join(root, "index.html"), res);
+        serve(path.join(root, "index.html"), res, iconFontCSS);
       }
     });
   });
@@ -66,7 +96,7 @@ function startStaticServer() {
   });
 }
 
-function serve(filePath, res) {
+function serve(filePath, res, iconFontCSS) {
   const ext = path.extname(filePath).toLowerCase();
   fs.readFile(filePath, (err, data) => {
     if (err) {
@@ -74,14 +104,24 @@ function serve(filePath, res) {
       res.end();
       return;
     }
-    res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+    const headers = { "Content-Type": MIME[ext] || "application/octet-stream" };
+
+    if (ext === ".html") {
+      let html = data.toString("utf-8");
+      // Вставляем base64-шрифт прямо в <head> — ДО всех <script>
+      if (iconFontCSS) {
+        html = html.replace("<head>", `<head>\n${iconFontCSS}`);
+      }
+      res.writeHead(200, headers);
+      res.end(html, "utf-8");
+      return;
+    }
+
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
 
-// Приложение ходит в https://booomerangs.ru/api напрямую. Из окна Electron
-// браузер добавит Origin, который сервер может не пропустить (CORS).
-// Убираем Origin для запросов к API — сервер обрабатывает их как обычного клиента.
 function stripOriginForApi(session) {
   session.webRequest.onBeforeSendHeaders((details, callback) => {
     if (details.url.startsWith("https://booomerangs.ru/")) {
@@ -107,11 +147,11 @@ async function createWindow(server) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
+      webSecurity: false,
     },
   });
 
-  // Внешние ссылки — в системный браузер, а не внутрь окна
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) shell.openExternal(url);
     return { action: "deny" };
