@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import {
@@ -44,6 +44,11 @@ const CANDIDATE_STATUS_LABELS: Record<string, string> = {
   ready_for_pickup: "Готов к выдаче",
 };
 
+// Те же дефолты, что на сервере сайта (server/review-request-email.ts)
+const DEFAULT_SUBJECT = "Понравилась покупка? Оставьте отзыв ⭐";
+const DEFAULT_BODY =
+  "Привет, {name}! Надеемся, ваш заказ уже радует. Поделитесь впечатлением — это займёт минуту и поможет другим покупателям.";
+
 export default function ReviewsScreen() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -62,6 +67,12 @@ export default function ReviewsScreen() {
   const [busyPreview, setBusyPreview] = useState(false);
   const [busySend, setBusySend] = useState(false);
   const [notice, setNotice] = useState("");
+  // Редактируемые тема и текст письма (как на сайте)
+  const [subject, setSubject] = useState(DEFAULT_SUBJECT);
+  const [body, setBody] = useState(DEFAULT_BODY);
+  const [generating, setGenerating] = useState(false);
+  // Список кандидатов свёрнут по умолчанию — раскрывается по кнопке
+  const [showCandidates, setShowCandidates] = useState(false);
 
   const load = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -150,6 +161,30 @@ export default function ReviewsScreen() {
     );
   };
 
+  const generateDraft = async () => {
+    setGenerating(true);
+    setError("");
+    setNotice("");
+    try {
+      const res = await apiPost<{ text?: string }>("/admin/review-requests/generate", {});
+      if (res.text) {
+        setBody(res.text);
+        setNotice("✨ Текст письма сгенерирован ИИ — проверь перед отправкой");
+      } else {
+        setError("ИИ не вернул текст, попробуй ещё раз");
+      }
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const resetMessage = () => {
+    setSubject(DEFAULT_SUBJECT);
+    setBody(DEFAULT_BODY);
+  };
+
   const sendPreview = async () => {
     const email = previewEmail.trim();
     if (!email) {
@@ -160,7 +195,11 @@ export default function ReviewsScreen() {
     setError("");
     setNotice("");
     try {
-      const res = await apiPost<{ sentTo?: string; success?: boolean }>("/admin/review-requests/preview", { email });
+      const res = await apiPost<{ sentTo?: string; success?: boolean }>("/admin/review-requests/preview", {
+        email,
+        subject: subject.trim(),
+        body: body.trim(),
+      });
       setNotice(
         res.sentTo
           ? `📨 Превью отправлено на ${res.sentTo}${res.success === false ? " (не удалось)" : ""}`
@@ -176,13 +215,19 @@ export default function ReviewsScreen() {
   const sendToSelected = async () => {
     const orderIds = candidates.filter((c) => c.orderId != null && selected.has(c.orderId)).map((c) => c.orderId as number);
     if (orderIds.length === 0) return;
+    const subj = subject.trim();
+    const bodyText = body.trim();
+    if (!subj || !bodyText) {
+      setError("Заполни тему и текст письма");
+      return;
+    }
     setBusySend(true);
     setError("");
     setNotice("");
     try {
       const res = await apiPost<{ sent?: number; total?: number; failed?: number }>(
         "/admin/review-requests/send",
-        { orderIds },
+        { orderIds, subject: subj, body: bodyText },
       );
       setNotice(
         `✅ Письма отправлены: ${res.sent ?? 0} из ${res.total ?? orderIds.length}${res.failed ? ` · Ошибок: ${res.failed}` : ""}`,
@@ -254,6 +299,18 @@ export default function ReviewsScreen() {
               ) : null}
 
               {candidates.length > 0 ? (
+                <Pressable onPress={() => setShowCandidates((v) => !v)} style={styles.expandBtn}>
+                  <Ionicons name={showCandidates ? "chevron-up" : "people-outline"} size={16} color={colors.accent} />
+                  <Text style={styles.expandText}>
+                    {showCandidates
+                      ? "Скрыть список покупателей"
+                      : `Показать список покупателей (${candidates.length})`}
+                  </Text>
+                  <Ionicons name={showCandidates ? "chevron-up" : "chevron-down"} size={16} color={colors.textMuted} />
+                </Pressable>
+              ) : null}
+
+              {candidates.length > 0 && showCandidates ? (
                 <View>
                   <Pressable onPress={toggleSelectAll} style={styles.selectAll}>
                     <Ionicons
@@ -312,6 +369,45 @@ export default function ReviewsScreen() {
                   </View>
                 </View>
               ) : null}
+
+              {/* Редактор письма (как на сайте) */}
+              <View style={styles.editorBlock}>
+                <Field
+                  label="Тема письма"
+                  value={subject}
+                  onChangeText={setSubject}
+                  placeholder="Тема письма"
+                  maxLength={200}
+                />
+                <View style={styles.editorHeader}>
+                  <Text style={styles.editorLabel}>Текст письма</Text>
+                  <View style={styles.editorActions}>
+                    <Pressable onPress={generateDraft} disabled={generating} style={styles.editorBtn}>
+                      <Ionicons name="sparkles-outline" size={14} color={colors.accent} />
+                      <Text style={[styles.editorBtnText, { color: colors.accent }]}>
+                        {generating ? "Генерирую…" : "Сгенерировать ИИ"}
+                      </Text>
+                    </Pressable>
+                    <Pressable onPress={resetMessage} style={styles.editorBtn}>
+                      <Ionicons name="refresh" size={14} color={colors.textMuted} />
+                      <Text style={styles.editorBtnText}>Сбросить</Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <TextInput
+                  value={body}
+                  onChangeText={setBody}
+                  placeholder="Введите текст письма…"
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  maxLength={5000}
+                  style={styles.bodyInput}
+                />
+                <Text style={styles.editorHint}>
+                  Плейсхолдер {"{name}"} заменится именем покупателя. Ссылки на товары добавляются автоматически. Изменения
+                  применяются только к этой отправке — стандартный шаблон на сайте не меняется.
+                </Text>
+              </View>
 
               <View style={styles.previewRow}>
                 <View style={styles.previewField}>
@@ -475,6 +571,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: spacing.md,
   },
+  expandBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
+  },
+  expandText: {
+    flex: 1,
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: "600",
+  },
   selectAll: {
     flexDirection: "row",
     alignItems: "center",
@@ -555,6 +668,54 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     marginTop: spacing.md,
+  },
+  editorBlock: {
+    marginBottom: spacing.md,
+  },
+  editorHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.sm,
+    marginBottom: 4,
+    gap: spacing.sm,
+    flexWrap: "wrap",
+  },
+  editorLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  editorActions: {
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+  editorBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  editorBtnText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  bodyInput: {
+    backgroundColor: colors.surfaceAlt,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: 14,
+    minHeight: 110,
+    textAlignVertical: "top",
+  },
+  editorHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 6,
   },
   statsRow: {
     flexDirection: "row",

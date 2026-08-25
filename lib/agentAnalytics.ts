@@ -403,9 +403,12 @@ async function findProblems(command: string): Promise<string | null> {
 }
 
 /**
- * Локальный перехват ТОЛЬКО того, чего у серверного агента нет:
- * утреннее резюме и поиск проблем. Аналитика продаж больше НЕ перехватывается —
- * сервер умеет analyze_orders через Groq и понимает естественную речь лучше.
+ * ЛОКАЛЬНЫЙ РОУТЕР (экономия токенов Groq).
+ *
+ * Принцип безопасности: перехватываем вопрос локально ТОЛЬКО при уверенном
+ * совпадении по ключевым словам И отсутствии признаков других намерений.
+ * Любое сомнение (write-слова, статусы, «кто купил», странные формулировки) —
+ * возвращаем null, и вопрос получает серверный ИИ-агент.
  */
 export async function tryLocalAssistant(command: string): Promise<string | null> {
   try {
@@ -414,8 +417,18 @@ export async function tryLocalAssistant(command: string): Promise<string | null>
       const res = await findProblems(command);
       if (res !== null) return res;
     }
+    if (HELP_RE.test(command)) return HELP_TEXT;
+    // Аналитика продаж — считаем сами (главная экономия токенов).
+    const analytics = await tryLocalOrderAnalytics(command);
+    if (analytics !== null) return analytics;
+    const clients = await tryTopClients(command);
+    if (clients !== null) return clients;
+    const orders = await tryRecentOrders(command);
+    if (orders !== null) return orders;
+    const products = await tryFindProducts(command);
+    if (products !== null) return products;
   } catch {
-    // данные недоступны — пусть пробует серверный агент
+    // данные недоступны — пусть отвечает серверный агент
   }
   return null;
 }
@@ -445,6 +458,134 @@ export async function tryLocalFallback(command: string): Promise<string | null> 
 const DIGEST_RE = /(доброе утро|сводк|дайджест|что нового|резюме|итоги за|как дела у магазина)/i;
 const PROBLEMS_RE =
   /(проблем|без\s*seo|без описания|не заполнен|висят|висит|зависли|зависших|нет в наличии|закончил|нулевой остаток|out of stock)/i;
+
+/* ------------------------------------------------------------------ */
+/* Роутер: помощь, клиенты, последние заказы, поиск товаров            */
+/* ------------------------------------------------------------------ */
+
+const HELP_RE = /(что ты умеешь|что умеешь|список команд|какие команды|^\s*help\s*$|^\s*помощь\s*$)/i;
+
+/** Слова-признаки того, что вопрос сложнее простого списка — не перехватываем. */
+const COMPLEX_INTENT_RE =
+  /(статус|оплач|достав|отмен|возврат|кто купил|купивш|промокод|измени|обнови|удали|скрой|скрыть|поменяй|отправь|заполни|почему|сравни|спрогнозир)/i;
+
+const CLIENTS_TOP_RE =
+  /(топ|лучшие|самые|рейтинг)[^\n]{0,20}(клиент|покупател|людей)|кто\s+(у нас\s+)?(наши\s+)?(лучшие|топ)|покажи\s+клиентов/i;
+
+const RECENT_ORDERS_RE =
+  /(последн|свеж|недавн)[^\n]{0,15}заказ|(покажи|приведи|какие)\s+заказы/i;
+
+const FIND_PRODUCT_RE = /(найди|покажи|ищи|поиск)\s+(товар|худи|футболк|шапк|носк|мерч|свитшот|штан|кепк)/i;
+
+const HELP_TEXT = [
+  "🤖 Я BOOOM AI — управляю магазином по обычной речи.",
+  "",
+  "Мгновенно (без ИИ, всегда работает):",
+  "• аналитика продаж — «сколько продалось худи дикая мята», «выручка за месяц»",
+  "• топ клиентов — «кто наши лучшие клиенты»",
+  "• последние заказы — «покажи последние заказы»",
+  "• найти товар — «найди товар дикая мята»",
+  "• проблемы магазина — «товары без seo», «зависшие заказы»",
+  "• утреннее резюме — «доброе утро» / «что нового»",
+  "",
+  "Через ИИ (понимает любые формулировки):",
+  "• брошенные корзины, кто купил товар, выгрузка CSV",
+  "• создание промокодов, изменение цен, скрытие товаров",
+  "• любые сложные и многошаговые вопросы",
+].join("\n");
+
+interface ClientRow {
+  id?: number;
+  name?: string;
+  email?: string;
+  totalSpent?: number;
+  loyaltyDiscount?: number;
+}
+
+async function tryTopClients(command: string): Promise<string | null> {
+  const cmd = command.toLowerCase();
+  if (!CLIENTS_TOP_RE.test(cmd) || WRITE_CMD_RE.test(cmd) || COMPLEX_INTENT_RE.test(cmd)) return null;
+  let users: ClientRow[] = [];
+  try {
+    const data = await apiGet<{ users?: ClientRow[] }>("/admin/users");
+    users = Array.isArray(data?.users) ? data.users : [];
+  } catch {
+    return null; // данные недоступны — пусть отвечает ИИ
+  }
+  if (!users.length) return "Клиентов пока нет.";
+  const sorted = [...users].sort((a, b) => (b.totalSpent || 0) - (a.totalSpent || 0));
+  const top = sorted.slice(0, 10);
+  const lines = [`👥 Топ клиентов (${users.length} всего, показано ${top.length}):`];
+  top.forEach((u, i) => {
+    lines.push(
+      `${i + 1}. ${u.name || "—"} (${u.email || "—"}) — на ${rub(Number(u.totalSpent) || 0)}${
+        u.loyaltyDiscount ? `, скидка ${u.loyaltyDiscount}%` : ""
+      }`,
+    );
+  });
+  return lines.join("\n");
+}
+
+async function tryRecentOrders(command: string): Promise<string | null> {
+  const cmd = command.toLowerCase();
+  if (!RECENT_ORDERS_RE.test(cmd) || WRITE_CMD_RE.test(cmd) || COMPLEX_INTENT_RE.test(cmd)) return null;
+  // «Последние заказы мерч X» — это аналитика, её уже забрал другой обработчик.
+  if (ANALYTICS_RE.test(cmd)) return null;
+  let orders: Order[] = [];
+  try {
+    orders = await apiGet<Order[]>("/admin/orders");
+  } catch {
+    return null;
+  }
+  const real = orders.filter(
+    (o) => !(o as Record<string, unknown>).isDraft && o.status !== "cancelled",
+  );
+  const sorted = [...real].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+  );
+  if (!sorted.length) return "Заказов пока нет.";
+  const lines = [`📦 Последние заказы (${sorted.length} всего, показано 10):`];
+  for (const o of sorted.slice(0, 10)) {
+    const d = o.createdAt ? new Date(o.createdAt).toLocaleDateString("ru-RU") : "—";
+    lines.push(`• №${o.id} — ${o.customerName || "—"}, ${rub(itemSum(o))}, ${d}, ${o.status || "—"}`);
+  }
+  return lines.join("\n");
+}
+
+async function tryFindProducts(command: string): Promise<string | null> {
+  const cmd = command.toLowerCase();
+  if (!FIND_PRODUCT_RE.test(cmd) || WRITE_CMD_RE.test(cmd) || COMPLEX_INTENT_RE.test(cmd)) return null;
+  const tokens = extractTokens(command).filter((t) => t !== "товар");
+  if (!tokens.length) return null; // не поняли, что ищем — отдадим ИИ
+  let prods: Product[] = [];
+  try {
+    prods = await fetchAdminProducts();
+  } catch {
+    return null;
+  }
+  const found = prods.filter((p) => {
+    const name = String(p.name || "").toLowerCase();
+    return tokens.every((t) => name.includes(t));
+  });
+  if (!found.length) return `Товаров по запросу «${tokens.join(" ")}» не найдено.`;
+  const shown = found.slice(0, 10);
+  const lines = [`🔍 Найдено товаров: ${found.length} (показано ${shown.length}):`];
+  for (const p of shown) {
+    const stock = Number(p.stock) || 0;
+    lines.push(
+      `• [ID: ${p.id}] ${p.name} — ${formatRubSafe(p.price)}${p.isHidden ? " 🚫 скрыт" : ""}${
+        stock === 0 ? " ❗нет в наличии" : ""
+      }`,
+    );
+  }
+  if (found.length > shown.length) lines.push(`…и ещё ${found.length - shown.length}`);
+  return lines.join("\n");
+}
+
+function formatRubSafe(kopecks?: number): string {
+  const v = Number(kopecks) || 0;
+  return `${Math.round(v / 100).toLocaleString("ru-RU")} ₽`;
+}
 
 async function fetchAdminProducts(): Promise<Product[]> {
   const data = await apiGet<{ products?: Product[] }>('/products?limit=5000&admin=true');

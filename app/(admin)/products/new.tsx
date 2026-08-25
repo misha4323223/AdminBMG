@@ -6,11 +6,10 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { Accordion } from "@/components/Accordion";
-import { Button, Card, Field, InlineError, SectionTitle } from "@/components/ui";
+import { Button, Card, Field, InlineError, SectionTitle, SeoCounter } from "@/components/ui";
 import { SelectField } from "@/components/SelectField";
 import { SizesEditor, type SizesValue } from "@/components/SizesEditor";
-import { apiGet, apiPost, getErrorMessage, uploadImage } from "@/lib/api";
-import { subcategoriesFor, subSubsFor, useCategories } from "@/lib/categories";
+import { apiGet, apiPost, getErrorMessage, uploadImage } from "@/lib/api";import { subcategoriesFor, subSubsFor, useCategories } from "@/lib/categories";
 import { colors, radius, spacing } from "@/constants/theme";
 
 const EMPTY_SIZES: SizesValue = {
@@ -265,7 +264,9 @@ export default function NewProductScreen() {
 
       <Accordion title="SEO и «Дополните образ»" icon="search-outline">
         <Field label="SEO-заголовок" value={seoTitle} onChangeText={setSeoTitle} multiline />
+        <SeoCounter text={seoTitle} min={50} max={65} />
         <Field label="SEO-описание" value={seoDescription} onChangeText={setSeoDescription} multiline />
+        <SeoCounter text={seoDescription} min={120} max={165} />
         <Field label="SEO-текст (HTML)" value={seoBody} onChangeText={setSeoBody} multiline />
         <Field label="Образ: категория" value={lookCategory} onChangeText={setLookCategory} />
         <Field label="Образ: подкатегория" value={lookSubcategory} onChangeText={setLookSubcategory} />

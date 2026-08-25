@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  Animated,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -13,7 +15,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { Button, InlineError } from "@/components/ui";
+import { Splash } from "@/components/Splash";
 import { colors, font, radius, spacing } from "@/constants/theme";
+
+const LOGO = require("@/assets/logo-light.png");
+
+type Field = "email" | "password" | "apiKey" | null;
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -23,12 +30,27 @@ export default function LoginScreen() {
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState<Field>(null);
+  const [showSplash, setShowSplash] = useState(true);
+
+  // Плавное появление формы после заставки
+  const formOpacity = useRef(new Animated.Value(0)).current;
+  const formTranslate = useRef(new Animated.Value(24)).current;
+
+  useEffect(() => {
+    if (!showSplash) {
+      Animated.parallel([
+        Animated.timing(formOpacity, { toValue: 1, duration: 450, useNativeDriver: true }),
+        Animated.timing(formTranslate, { toValue: 0, duration: 450, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [showSplash, formOpacity, formTranslate]);
 
   useEffect(() => {
     if (!isLoading && user) {
       router.replace("/(admin)");
     }
-  }, [isLoading, user]);
+  }, [isLoading, user, router]);
 
   const submit = async () => {
     setError("");
@@ -47,6 +69,11 @@ export default function LoginScreen() {
     }
   };
 
+  const inputStyle = (name: Exclude<Field, null>) => [
+    styles.inputWrap,
+    focused === name && styles.inputWrapFocused,
+  ];
+
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
@@ -57,21 +84,35 @@ export default function LoginScreen() {
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.logo}>
-            <Ionicons name="flash" size={34} color={colors.accent} />
-            <Text style={styles.brand}>BOOOMERANGS</Text>
-            <Text style={styles.caption}>Админ-панель</Text>
-          </View>
+          <Animated.View style={[styles.header, { opacity: formOpacity }]}>
+            <Image source={LOGO} style={styles.logo} resizeMode="contain" />
+            <View style={styles.captionRow}>
+              <View style={styles.captionLine} />
+              <Text style={styles.caption}>АДМИН-ПАНЕЛЬ</Text>
+              <View style={styles.captionLine} />
+            </View>
+          </Animated.View>
 
-          <View style={styles.form}>
+          <Animated.View
+            style={[
+              styles.form,
+              { opacity: formOpacity, transform: [{ translateY: formTranslate }] },
+            ]}
+          >
             <InlineError text={error} />
 
             <Text style={styles.label}>Email администратора</Text>
-            <View style={styles.inputWrap}>
-              <Ionicons name="mail-outline" size={16} color={colors.textMuted} />
+            <View style={inputStyle("email")}>
+              <Ionicons
+                name="mail-outline"
+                size={16}
+                color={focused === "email" ? colors.accent : colors.textMuted}
+              />
               <TextInput
                 value={email}
                 onChangeText={setEmail}
+                onFocus={() => setFocused("email")}
+                onBlur={() => setFocused(null)}
                 placeholder="admin@booomerangs.ru"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
@@ -82,11 +123,17 @@ export default function LoginScreen() {
             </View>
 
             <Text style={styles.label}>Пароль</Text>
-            <View style={styles.inputWrap}>
-              <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
+            <View style={inputStyle("password")}>
+              <Ionicons
+                name="lock-closed-outline"
+                size={16}
+                color={focused === "password" ? colors.accent : colors.textMuted}
+              />
               <TextInput
                 value={password}
                 onChangeText={setPassword}
+                onFocus={() => setFocused("password")}
+                onBlur={() => setFocused(null)}
                 placeholder="••••••••"
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry
@@ -95,11 +142,17 @@ export default function LoginScreen() {
             </View>
 
             <Text style={styles.label}>API-ключ админки</Text>
-            <View style={styles.inputWrap}>
-              <Ionicons name="key-outline" size={16} color={colors.textMuted} />
+            <View style={inputStyle("apiKey")}>
+              <Ionicons
+                name="key-outline"
+                size={16}
+                color={focused === "apiKey" ? colors.accent : colors.textMuted}
+              />
               <TextInput
                 value={apiKey}
                 onChangeText={setApiKey}
+                onFocus={() => setFocused("apiKey")}
+                onBlur={() => setFocused(null)}
                 placeholder="ADMIN_API_KEY"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
@@ -108,20 +161,24 @@ export default function LoginScreen() {
               />
             </View>
 
-            <Button
-              title="Войти в админку"
-              onPress={submit}
-              loading={busy}
-              icon="arrow-forward"
-            />
-          </View>
+            <View style={styles.submitWrap}>
+              <Button
+                title="Войти в админку"
+                onPress={submit}
+                loading={busy}
+                icon="arrow-forward"
+              />
+            </View>
+          </Animated.View>
 
-          <Text style={styles.hint}>
+          <Animated.Text style={[styles.hint, { opacity: formOpacity }]}>
             Вход выполняется через ту же учётную запись администратора и
             API-ключ, что и на сайте booomerangs.ru/admin.
-          </Text>
+          </Animated.Text>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {showSplash || isLoading ? <Splash onDone={() => setShowSplash(false)} /> : null}
     </SafeAreaView>
   );
 }
@@ -136,22 +193,30 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.xl,
   },
-  logo: {
+  header: {
     alignItems: "center",
     marginBottom: spacing.xxl,
   },
-  brand: {
-    color: colors.text,
-    fontSize: 26,
-    fontWeight: "800",
-    fontFamily: font.bold,
-    letterSpacing: 1,
+  logo: {
+    width: 240,
+    height: 99,
+  },
+  captionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
     marginTop: spacing.sm,
+  },
+  captionLine: {
+    width: 36,
+    height: 1,
+    backgroundColor: colors.border,
   },
   caption: {
     color: colors.textMuted,
-    fontSize: 13,
-    marginTop: 2,
+    fontSize: 11,
+    letterSpacing: 3,
+    fontWeight: "600",
   },
   form: {
     gap: spacing.sm,
@@ -160,6 +225,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     marginTop: spacing.sm,
+    marginBottom: 2,
   },
   inputWrap: {
     flexDirection: "row",
@@ -167,15 +233,26 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
+  },
+  inputWrapFocused: {
+    borderColor: colors.accent,
+    shadowColor: colors.glowAccent,
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
   },
   input: {
     flex: 1,
     color: colors.text,
     paddingVertical: spacing.md,
     fontSize: 15,
+  },
+  submitWrap: {
+    marginTop: spacing.lg,
   },
   hint: {
     color: colors.textMuted,

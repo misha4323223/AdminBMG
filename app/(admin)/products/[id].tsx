@@ -6,7 +6,7 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { Accordion } from "@/components/Accordion";
-import { Button, Card, Field, InlineError, LoadingView, SectionTitle } from "@/components/ui";
+import { Button, Card, Field, InlineError, LoadingView, SectionTitle, SeoCounter } from "@/components/ui";
 import { SelectField } from "@/components/SelectField";
 import { SizesEditor, type SizesValue } from "@/components/SizesEditor";
 import { FeatureBadgesEditor } from "@/components/FeatureBadgesEditor";
@@ -638,7 +638,9 @@ export default function ProductDetailScreen() {
         }
       >
         <Field label="SEO-заголовок" value={form.seoTitle} onChangeText={(v) => set("seoTitle", v)} multiline />
+        <SeoCounter text={form.seoTitle} min={50} max={65} />
         <Field label="SEO-описание" value={form.seoDescription} onChangeText={(v) => set("seoDescription", v)} multiline />
+        <SeoCounter text={form.seoDescription} min={120} max={165} />
         <Field label="SEO-текст (HTML)" value={form.seoBody} onChangeText={(v) => set("seoBody", v)} multiline />
         <Field label="JSON-LD (разметка)" value={form.seoJsonLd} onChangeText={(v) => set("seoJsonLd", v)} multiline />
         <Field label="Alt-тексты фото (по одному на строку)" value={form.imageAlts} onChangeText={(v) => set("imageAlts", v)} multiline />

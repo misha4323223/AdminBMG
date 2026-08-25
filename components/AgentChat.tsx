@@ -26,6 +26,21 @@ interface ChatMessage {
   pendingWrite?: AgentWritePayload | null;
 }
 
+/* Безопасное превращение ответа сервера в текст:
+ * если пришёл объект (а не строка) — показываем читаемый JSON, а не «[object Object]». */
+function asDisplayText(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v, null, 2);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+
 /* ── Общая история чата ─────────────────────────────────────────────────
  * Модульный кэш: все экземпляры AgentChat (главная, вкладка AI, полный экран)
  * видят одну переписку в рамках сессии. Плюс персистентность в хранилище —
@@ -104,8 +119,9 @@ export function AgentChat({
     setMessages((m) => [...m, { role: "user", content: command }]);
     setBusy(true);
     try {
-      // Локально отвечаем только на то, чего у сервера нет: резюме и проблемы.
-      // Всё остальное — серверному агенту (Groq + инструменты admin-tools).
+      // Локальный роутер: уверенно распознанные простые вопросы (аналитика,
+      // клиенты, заказы, товары, резюме, проблемы) считаем сами — экономия токенов.
+      // Всё, что не распознано (return null), уходит серверному ИИ-агенту.
       const local = await tryLocalAssistant(command);
       if (local !== null) {
         setMessages((m) => [...m, { role: "assistant", content: local }]);
@@ -116,7 +132,7 @@ export function AgentChat({
         .slice(-15) // сервер принимает до 15 сообщений истории
         .map((m) => ({ role: m.role, content: m.content }));
       const res = await apiPost<any>("/admin/agent/chat", { command, history });
-      const answer: string = String(res?.text ?? res?.description ?? "");
+      const answer = asDisplayText(res?.text ?? res?.description);
       // Сервер вернул заглушку («Не удалось распознать команду» / пустоту) —
       // значит LLM ответила пустотой. Пробуем посчитать локально вместо тупика.
       if (!answer.trim() || /не удалось распознать/i.test(answer)) {
@@ -147,12 +163,12 @@ export function AgentChat({
           ...m,
           {
             role: "assistant",
-            content: res.description || "Подтвердить операцию?",
+            content: asDisplayText(res.description) || "Подтвердить операцию?",
             pendingWrite: { tool: res.tool, params: res.params || {} },
           },
         ]);
       } else {
-        setMessages((m) => [...m, { role: "assistant", content: res.text || "Готово" }]);
+        setMessages((m) => [...m, { role: "assistant", content: asDisplayText(res.text) || "Готово" }]);
       }
     } catch (e) {
       // Сервер недоступен — пробуем посчитать локально, чтобы чат не молчал
@@ -186,7 +202,7 @@ export function AgentChat({
       setMessages((m) =>
         m.map((x) =>
           x === msg
-            ? { role: "assistant", content: res.result || "Выполнено", pendingWrite: null }
+            ? { role: "assistant", content: asDisplayText(res.result) || "Выполнено", pendingWrite: null }
             : x,
         ),
       );
@@ -204,20 +220,38 @@ export function AgentChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoCommand]);
 
-  /* Рендер ответа: части в ```…``` — моноширинным (CSV, таблицы) */
+  /* Рендер ответа: части в ```…``` — моноширинным (CSV, таблицы),
+   * в обычном тексте убираем markdown-заголовки и выделяем **жирный**. */
   const renderContent = (content: string) => {
     const parts = content.split("```");
-    if (parts.length === 1) return <Text style={styles.bubbleText}>{content}</Text>;
+    if (parts.length === 1) return renderMarkdown(content, 0);
     return parts.map((part, i) =>
       i % 2 === 1 ? (
         <Text key={i} style={styles.codeText} selectable>
           {part.replace(/^\n/, "").replace(/\n$/, "")}
         </Text>
       ) : part ? (
-        <Text key={i} style={styles.bubbleText}>
-          {part}
-        </Text>
+        <React.Fragment key={i}>{renderMarkdown(part, i)}</React.Fragment>
       ) : null,
+    );
+  };
+
+  const renderMarkdown = (text: string, keyBase: number) => {
+    // «## Заголовок» → просто текст без решёток
+    const cleaned = text.replace(/^#{1,6}\s+/gm, "");
+    const segments = cleaned.split(/(\*\*[^*\n]+\*\*)/g);
+    return (
+      <Text style={styles.bubbleText} selectable>
+        {segments.map((seg, i) =>
+          seg.startsWith("**") && seg.endsWith("**") && seg.length > 4 ? (
+            <Text key={`${keyBase}-${i}`} style={styles.bubbleTextBold}>
+              {seg.slice(2, -2)}
+            </Text>
+          ) : (
+            seg
+          ),
+        )}
+      </Text>
     );
   };
 
@@ -230,6 +264,8 @@ export function AgentChat({
         ref={scrollRef}
         style={styles.flex}
         contentContainerStyle={styles.chatContent}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
         <InlineError text={error} />
@@ -326,6 +362,7 @@ const styles = StyleSheet.create({
   bubbleUserBg: { backgroundColor: colors.accent },
   bubbleAiBg: { backgroundColor: colors.surface },
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  bubbleTextBold: { fontWeight: "700" },
   codeText: {
     color: colors.text,
     fontSize: 12,

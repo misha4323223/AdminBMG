@@ -92,7 +92,31 @@ function startStaticServer() {
   });
 
   return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve(server));
+    // Порт должен быть ОДНИМ И ТЕМ ЖЕ при каждом запуске: localStorage привязан к адресу
+    // 127.0.0.1:ПОРТ — если порт меняется, хранилище выглядит пустым и вход слетает.
+    let preferred = 0;
+    try {
+      const n = parseInt(fs.readFileSync(path.join(app.getPath("userData"), "server-port.txt"), "utf-8"), 10);
+      if (Number.isInteger(n) && n > 1024 && n < 65536) preferred = n;
+    } catch {}
+    const remember = () => {
+      try {
+        fs.writeFileSync(path.join(app.getPath("userData"), "server-port.txt"), String(server.address().port));
+      } catch {}
+    };
+    server.once("error", (err) => {
+      if (err && err.code === "EADDRINUSE") {
+        // Порт занят (редко) — берём случайный и перезапоминаем
+        server.listen(0, "127.0.0.1", () => {
+          remember();
+          resolve(server);
+        });
+      }
+    });
+    server.listen(preferred || 0, "127.0.0.1", () => {
+      remember();
+      resolve(server);
+    });
   });
 }
 

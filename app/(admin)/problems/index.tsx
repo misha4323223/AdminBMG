@@ -12,6 +12,7 @@ import { useRouter } from "expo-router";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
+import { DuplicatesPanel } from "@/components/DuplicatesPanel";
 import { Badge, Button, Card, EmptyState, InlineError, LoadingView, SectionTitle } from "@/components/ui";
 import { apiGet, apiPost, getErrorMessage } from "@/lib/api";
 import { formatRub } from "@/lib/format";
@@ -20,6 +21,7 @@ import { useCategories } from "@/lib/categories";
 import { colors, radius, spacing } from "@/constants/theme";
 
 type Filter = "all" | "hidden" | "noimage" | "zeroprice";
+type SubTab = "items" | "duplicates";
 
 interface ProblemsResponse {
   products?: Array<Record<string, any>>;
@@ -55,6 +57,9 @@ export default function ProblemsScreen() {
   const [error, setError] = useState("");
 
   const [filter, setFilter] = useState<Filter>("all");
+  const [subTab, setSubTab] = useState<SubTab>("items");
+  // activeSub: без сужения типа внутри JSX (тернарник ниже сужает subTab до "items")
+  const activeSub: SubTab = subTab;
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -220,6 +225,9 @@ export default function ProblemsScreen() {
 
   return (
     <Screen title="Проблемные товары" subtitle={error || `${allCount} проблемных`} scroll={false}>
+      {subTab === "duplicates" ? (
+        <DuplicatesPanel />
+      ) : (
       <FlatList
         data={visible}
         keyExtractor={(p) => String(p.id)}
@@ -232,6 +240,28 @@ export default function ProblemsScreen() {
         ListHeaderComponent={
           <View>
             <InlineError text={error} />
+
+            {/* Под-вкладки: Товары / Дубли (как на сайте) */}
+            <View style={styles.subTabs}>
+              <Pressable
+                onPress={() => setSubTab("items")}
+                style={[styles.subTab, activeSub === "items" && styles.subTabActive]}
+              >
+                <Ionicons name="cube-outline" size={14} color={activeSub === "items" ? colors.white : colors.textMuted} />
+                <Text style={[styles.subTabText, activeSub === "items" && styles.subTabTextActive]}>
+                  Товары
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSubTab("duplicates")}
+                style={[styles.subTab, activeSub === "duplicates" && styles.subTabActive]}
+              >
+                <Ionicons name="copy-outline" size={14} color={activeSub === "duplicates" ? colors.white : colors.textMuted} />
+                <Text style={[styles.subTabText, activeSub === "duplicates" && styles.subTabTextActive]}>
+                  Дубли
+                </Text>
+              </Pressable>
+            </View>
 
             {/* Фильтры */}
             <View style={styles.filters}>
@@ -408,6 +438,7 @@ export default function ProblemsScreen() {
         )}
         ListEmptyComponent={loading ? <LoadingView /> : <EmptyState text={error || "Проблем нет"} />}
       />
+      )}
     </Screen>
   );
 }
@@ -434,6 +465,25 @@ function FilterChip({
 
 const styles = StyleSheet.create({
   list: { paddingBottom: spacing.xxl },
+  subTabs: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  subTab: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  subTabActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  subTabText: { color: colors.textMuted, fontSize: 13, fontWeight: "600" },
+  subTabTextActive: { color: colors.white },
   filters: {
     flexDirection: "row",
     flexWrap: "wrap",

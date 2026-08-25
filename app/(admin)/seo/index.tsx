@@ -20,8 +20,9 @@ import {
   InlineError,
   LoadingView,
   SectionTitle,
+  SeoCounter,
 } from "@/components/ui";
-import { apiGet, apiPost, getErrorMessage, uploadImage } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, getErrorMessage, uploadImage } from "@/lib/api";
 import { seoPageTypeLabel } from "@/lib/format";
 import { colors, radius, spacing } from "@/constants/theme";
 
@@ -228,7 +229,6 @@ function PageEditor({ page, onBack }: { page: SeoPage; onBack: () => void }) {
   const [saved, setSaved] = useState(false);
 
   const seoKey = pageKeyToSeoKey(page);
-  const titleLen = title.length;
 
   const save = async () => {
     setBusy(true);
@@ -307,18 +307,14 @@ function PageEditor({ page, onBack }: { page: SeoPage; onBack: () => void }) {
           value={title}
           onChangeText={setTitle}
         />
-        <Text style={styles.charCount}>
-          {titleLen} символов (рекомендуется 50–70)
-        </Text>
+        <SeoCounter text={title} min={50} max={70} />
         <Field
           label="Description (meta-описание)"
           value={description}
           onChangeText={setDescription}
           multiline
         />
-        <Text style={styles.charCount}>
-          {description.length} символов (рекомендуется 120–160)
-        </Text>
+        <SeoCounter text={description} min={120} max={165} />
       </Card>
 
       {page.type === "home" ? (
@@ -391,18 +387,56 @@ function PageEditor({ page, onBack }: { page: SeoPage; onBack: () => void }) {
   );
 }
 
+interface FullProduct {
+  id: number;
+  name: string;
+  slug?: string;
+  category?: string | null;
+  isHidden?: boolean;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+}
+
+interface SeoDraft {
+  product: FullProduct;
+  title: string;
+  description: string;
+}
+
+/** Черновик SEO из названия/категории — админ правит перед сохранением. */
+function draftSeo(p: FullProduct): SeoDraft {
+  const name = p.name.trim();
+  const cat = (p.category || "").trim().toLowerCase();
+  return {
+    product: p,
+    title: `${name} — купить ${cat || "в магазине BMGBRAND"} | BOOOMERANGS`,
+    description:
+      `${name} в официальном магазине BMGBRAND${cat ? `. ${cat}: оригинал, авторский дизайн` : ""}. ` +
+      "Доставка по всей России, оплата онлайн. Заказывайте на booomerangs.ru.",
+  };
+}
+
 function AuditTab() {
   const [data, setData] = useState<AuditData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [field, setField] = useState<"title" | "desc" | "body">("title");
   const [query, setQuery] = useState("");
+  const [products, setProducts] = useState<FullProduct[]>([]);
+  const [wizard, setWizard] = useState<SeoDraft | null>(null);
+  const [wizardBusy, setWizardBusy] = useState(false);
+  const [wizardMsg, setWizardMsg] = useState("");
 
   const load = async () => {
     setLoading(true);
     setError("");
     try {
-      setData(await apiGet<AuditData>("/admin/seo-audit"));
+      const [audit, prod] = await Promise.all([
+        apiGet<AuditData>("/admin/seo-audit"),
+        apiGet<{ products?: FullProduct[] }>("/products?limit=5000&admin=true"),
+      ]);
+      setData(audit);
+      setProducts(Array.isArray(prod.products) ? prod.products : []);
     } catch (e) {
       setError(getErrorMessage(e));
     } finally {
@@ -431,6 +465,80 @@ function AuditTab() {
         )
       : list;
 
+  /* --- Мастер дозаполнения --- */
+  const missingSeo = useMemo(
+    () =>
+      products.filter(
+        (pr) => !pr.isHidden && (!(pr.seoTitle || "").trim() || !(pr.seoDescription || "").trim()),
+      ),
+    [products],
+  );
+
+  const startWizard = () => {
+    setWizardMsg("");
+    if (missingSeo.length) setWizard(draftSeo(missingSeo[0]));
+  };
+
+  const skipProduct = () => {
+    setWizardMsg("");
+    const rest = missingSeo.filter((x) => x.id !== wizard?.product.id);
+    setWizard(rest.length ? draftSeo(rest[0]) : null);
+  };
+
+  const saveWizard = async () => {
+    if (!wizard) return;
+    setWizardBusy(true);
+    setWizardMsg("");
+    try {
+      await apiPatch(`/admin/products/${wizard.product.id}`, {
+        seoTitle: wizard.title.trim(),
+        seoDescription: wizard.description.trim(),
+      });
+      // локально помечаем товар заполненным и переходим к следующему
+      setProducts((prev) =>
+        prev.map((x) =>
+          x.id === wizard.product.id
+            ? { ...x, seoTitle: wizard.title.trim(), seoDescription: wizard.description.trim() }
+            : x,
+        ),
+      );
+      load(); // тихо обновляем проценты аудита
+      const next = missingSeo.filter((x) => x.id !== wizard.product.id);
+      setWizardMsg(`Сохранено ✓ Осталось: ${next.length}`);
+      setWizard(next.length ? draftSeo(next[0]) : null);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setWizardBusy(false);
+    }
+  };
+
+  /* --- Дубли мета-тегов --- */
+  const duplicates = useMemo(() => {
+    interface DupGroup {
+      value: string;
+      kind: "title" | "desc";
+      names: string[];
+    }
+    const build = (kind: "title" | "desc", get: (p: FullProduct) => string): DupGroup[] => {
+      const map = new Map<string, string[]>();
+      for (const pr of products) {
+        if (pr.isHidden) continue;
+        const v = get(pr).trim().toLowerCase();
+        if (!v) continue;
+        const arr = map.get(v) || [];
+        arr.push(pr.name);
+        map.set(v, arr);
+      }
+      return [...map.entries()]
+        .filter(([, names]) => names.length > 1)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 5)
+        .map(([value, names]) => ({ value, kind, names }));
+    };
+    return [...build("title", (p) => String(p.seoTitle || "")), ...build("desc", (p) => String(p.seoDescription || ""))];
+  }, [products]);
+
   return (
     <ScrollView contentContainerStyle={styles.pad}>
       <InlineError text={error} />
@@ -438,6 +546,60 @@ function AuditTab() {
         <Text style={styles.auditTitle}>SEO-аудит</Text>
         <Button title="Обновить" variant="ghost" icon="refresh" onPress={load} loading={loading} />
       </View>
+
+      {/* --- Мастер дозаполнения SEO --- */}
+      {wizard ? (
+        <Card style={styles.card}>
+          <SectionTitle>✍️ Заполнение SEO — конвейер</SectionTitle>
+          <Text style={styles.hint}>
+            Товар {missingSeo.length ? `1 из ${missingSeo.length}` : "— последний"}. Черновик сгенерирован из названия и категории — поправь и сохрани.
+          </Text>
+          <Text style={styles.wizardProduct}>
+            [ID: {wizard.product.id}] {wizard.product.name}
+            {wizard.product.category ? ` · ${wizard.product.category}` : ""}
+          </Text>
+          <Field label="SEO-заголовок" value={wizard.title} onChangeText={(v) => setWizard({ ...wizard, title: v })} multiline />
+          <SeoCounter text={wizard.title} min={50} max={65} />
+          <Field label="SEO-описание" value={wizard.description} onChangeText={(v) => setWizard({ ...wizard, description: v })} multiline />
+          <SeoCounter text={wizard.description} min={120} max={165} />
+          {wizardMsg ? <Text style={styles.saved}>{wizardMsg}</Text> : null}
+          <View style={styles.wizardBtnRow}>
+            <View style={{ flex: 1 }}>
+              <Button title="Сохранить и след." onPress={saveWizard} loading={wizardBusy} icon="save-outline" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Button title="Пропустить" variant="secondary" onPress={skipProduct} disabled={wizardBusy} icon="play-skip-forward-outline" />
+            </View>
+          </View>
+          <Button title="Закрыть конвейер" variant="ghost" onPress={() => setWizard(null)} />
+        </Card>
+      ) : missingSeo.length && !loading ? (
+        <Card style={[styles.card, styles.wizardInvite]}>
+          <SectionTitle>Мастер дозаполнения</SectionTitle>
+          <Text style={styles.hint}>
+            Видимых товаров без SEO: {missingSeo.length}. Заполняй по одному с готовым черновиком — конвейером закроешь всё за минуты.
+          </Text>
+          <Button title={`Заполнить следующий (${missingSeo.length})`} onPress={startWizard} icon="arrow-forward-outline" />
+        </Card>
+      ) : null}
+
+      {/* --- Дубли мета-тегов --- */}
+      {!loading && duplicates.length > 0 ? (
+        <Card style={styles.card}>
+          <SectionTitle>🔁 Дубли мета-тегов</SectionTitle>
+          <Text style={styles.hint}>
+            Одинаковые тексты у нескольких товаров хуже, чем их отсутствие — поисковики показывают только один. Исправь через мастер или чат («заполни SEO товарам без SEO» не поможет — тексты нужно сделать уникальными).
+          </Text>
+          {duplicates.map((d) => (
+            <View key={`${d.kind}:${d.value}`} style={styles.dupBlock}>
+              <Text style={styles.dupValue} numberOfLines={1}>
+                {d.kind === "title" ? "Title" : "Description"}: {d.value}
+              </Text>
+              <Text style={styles.hint}>×{d.names.length}: {d.names.slice(0, 4).join(", ")}{d.names.length > 4 ? `, …и ещё ${d.names.length - 4}` : ""}</Text>
+            </View>
+          ))}
+        </Card>
+      ) : null}
 
       <Card style={styles.card}>
         <SectionTitle>Schema.org покрытие по типам страниц</SectionTitle>
@@ -725,4 +887,14 @@ const styles = StyleSheet.create({
   auditCategory: { color: colors.textMuted, fontSize: 12 },
   title: { color: colors.text, fontSize: 14, fontWeight: "600" },
   sub: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  wizardProduct: { color: colors.text, fontSize: 13, fontWeight: "600", marginTop: spacing.xs },
+  wizardBtnRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
+  wizardInvite: { borderLeftWidth: 3, borderLeftColor: colors.accent, gap: spacing.sm },
+  dupBlock: {
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    gap: 2,
+  },
+  dupValue: { color: colors.warning, fontSize: 12, fontWeight: "600" },
 });

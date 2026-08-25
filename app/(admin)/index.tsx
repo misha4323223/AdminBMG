@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { Screen } from "@/components/Screen";
 import { AgentChat } from "@/components/AgentChat";
 import { StatCard } from "@/components/ui";
@@ -113,11 +114,18 @@ export default function Dashboard() {
       }
     >
       {/* ── Hero: BOOOM AI ─────────────────────────────────────────── */}
-      <View style={styles.hero}>
+      <LinearGradient
+        colors={[...colors.gradCosmic]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.hero}
+      >
         <View style={styles.heroTop}>
-          <View style={styles.heroIcon}>
-            <Ionicons name="sparkles" size={22} color={colors.white} />
-          </View>
+          <Image
+            source={require("@/assets/logo-light.png")}
+            style={styles.heroLogo}
+            resizeMode="contain"
+          />
           <View style={styles.heroTextWrap}>
             <Text style={styles.heroTitle}>BOOOM AI</Text>
             <View style={styles.heroStatusRow}>
@@ -160,7 +168,7 @@ export default function Dashboard() {
           <View pointerEvents="none" style={styles.chipFadeOuter} />
           <View pointerEvents="none" style={styles.chipFadeInner} />
         </View>
-      </View>
+      </LinearGradient>
 
       {/* ── Чат с агентом прямо на главной ─────────────────────────── */}
       <View style={styles.chatCard}>
@@ -218,25 +226,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
   },
   hero: {
-    backgroundColor: "#22130c",
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: "#4a2a17",
+    borderColor: "rgba(215, 223, 238, 0.45)",
     padding: spacing.lg,
     marginBottom: spacing.lg,
+    overflow: "hidden",
+    shadowColor: colors.glowViolet,
+    shadowOpacity: 0.8,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
   },
   heroTop: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
   },
-  heroIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.accent,
+  heroLogo: {
+    width: 108,
+    height: 45,
   },
   heroTextWrap: {
     flex: 1,
@@ -284,7 +293,7 @@ const styles = StyleSheet.create({
     top: spacing.md,
     bottom: 0,
     width: 18,
-    backgroundColor: "rgba(34, 19, 12, 0.55)",
+    backgroundColor: "rgba(38, 40, 47, 0.55)",
   },
   chipFadeInner: {
     position: "absolute",
@@ -292,7 +301,7 @@ const styles = StyleSheet.create({
     top: spacing.md,
     bottom: 0,
     width: 8,
-    backgroundColor: "rgba(34, 19, 12, 0.25)",
+    backgroundColor: "rgba(38, 40, 47, 0.25)",
   },
   chips: {
     flexDirection: "row",
@@ -305,9 +314,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: 999,
-    backgroundColor: "rgba(255, 90, 31, 0.14)",
+    backgroundColor: "rgba(236, 238, 243, 0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255, 90, 31, 0.35)",
+    borderColor: "rgba(201, 206, 216, 0.35)",
   },
   chipPressed: { opacity: 0.75 },
   chipText: {

@@ -10,6 +10,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { colors, font, radius, spacing } from "@/constants/theme";
 
 export function Card({
@@ -18,10 +19,21 @@ export function Card({
   onPress,
 }: {
   children: React.ReactNode;
-  style?: ViewStyle;
+  style?: ViewStyle | Array<ViewStyle | undefined | null>;
   onPress?: () => void;
 }) {
-  const content = <View style={[styles.card, style]}>{children}</View>;
+  const content = (
+    <LinearGradient
+      colors={[...colors.gradCard]}
+      start={{ x: 0.1, y: 0 }}
+      end={{ x: 0.9, y: 1 }}
+      style={[styles.card, ...(Array.isArray(style) ? style : [style])]}
+    >
+      {/* Глянцевый блик — как отражение на жидком металле */}
+      <View pointerEvents="none" style={styles.cardGloss} />
+      {children}
+    </LinearGradient>
+  );
   if (!onPress) return content;
   return (
     <Pressable onPress={onPress} style={({ pressed }) => pressed && { opacity: 0.85 }}>
@@ -36,6 +48,23 @@ export function SectionTitle({ children }: { children: React.ReactNode }) {
 
 export function Label({ children }: { children: React.ReactNode }) {
   return <Text style={styles.label}>{children}</Text>;
+}
+
+/**
+ * Счётчик длины SEO-поля: зелёный в оптимальном диапазоне, жёлтый рядом,
+ * красный — если поисковик обрежет текст.
+ */
+export function SeoCounter({ text, min, max }: { text?: string; min: number; max: number }) {
+  const len = (text || "").trim().length;
+  if (!len) return null;
+  const ok = len >= min && len <= max;
+  const near = !ok && len >= min - 15 && len <= max + 15;
+  const color = ok ? colors.success : near ? colors.warning : colors.danger;
+  return (
+    <Text style={[styles.seoCounterText, { color }]}>
+      {len} симв. · норма {min}–{max} {ok ? "✓" : near ? "⚠" : "✗"}
+    </Text>
+  );
 }
 
 export function Field({
@@ -128,38 +157,54 @@ export function Button({
   loading?: boolean;
 }) {
   const bg =
-    variant === "primary"
-      ? colors.accent
-      : variant === "danger"
-        ? colors.danger
-        : variant === "secondary"
-          ? colors.surfaceAlt
-          : "transparent";
+    variant === "danger"
+      ? colors.danger
+      : variant === "secondary"
+        ? colors.surfaceAlt
+        : "transparent";
   const fg =
     variant === "ghost" ? colors.textMuted : colors.white;
+  const inner = loading ? (
+    <ActivityIndicator color={fg} />
+  ) : (
+    <>
+      {icon ? (
+        <Ionicons
+          name={icon}
+          size={16}
+          color={fg}
+          style={{ marginRight: spacing.xs }}
+        />
+      ) : null}
+      <Text style={[styles.buttonText, { color: fg }]}>{title}</Text>
+    </>
+  );
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled || loading}
       style={({ pressed }) => [
         styles.button,
-        { backgroundColor: bg, opacity: disabled ? 0.5 : pressed ? 0.85 : 1 },
+        variant === "primary" && styles.buttonPrimary,
+        {
+          backgroundColor: variant === "primary" ? undefined : bg,
+          opacity: disabled ? 0.5 : pressed ? 0.85 : 1,
+          overflow: "hidden",
+        },
+        variant === "primary" && { paddingVertical: 0, paddingHorizontal: 0 },
       ]}
     >
-      {loading ? (
-        <ActivityIndicator color={fg} />
+      {variant === "primary" ? (
+        <LinearGradient
+          colors={[...colors.gradPrimary]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.buttonGrad}
+        >
+          {inner}
+        </LinearGradient>
       ) : (
-        <>
-          {icon ? (
-            <Ionicons
-              name={icon}
-              size={16}
-              color={fg}
-              style={{ marginRight: spacing.xs }}
-            />
-          ) : null}
-          <Text style={[styles.buttonText, { color: fg }]}>{title}</Text>
-        </>
+        inner
       )}
     </Pressable>
   );
@@ -259,11 +304,23 @@ export function InlineError({ text }: { text: string }) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.lg,
+    borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.lg,
+    shadowColor: "#000",
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
+  },
+  cardGloss: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: "rgba(240, 244, 250, 0.35)",
   },
   sectionTitle: {
     color: colors.text,
@@ -277,6 +334,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: spacing.xs,
   },
+  seoCounterText: { fontSize: 11, marginTop: -spacing.xs, marginBottom: spacing.sm },
   fieldWrap: {
     marginBottom: spacing.md,
   },
@@ -328,6 +386,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     minHeight: 46,
   },
+  buttonPrimary: {
+    borderWidth: 0,
+    shadowColor: colors.accent,
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  buttonGrad: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    minHeight: 46,
+  },
   buttonText: {
     fontSize: 15,
     fontWeight: "600",
@@ -337,9 +410,9 @@ const styles = StyleSheet.create({
     minWidth: 140,
   },
   statIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.sm,

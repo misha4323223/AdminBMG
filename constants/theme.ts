@@ -1,17 +1,32 @@
-// Тёмная тема в стиле BOOOMERANGS (чёрный + оранжевый акцент).
+// Тема AdminBMG «Жидкий металл»: тёмный графит + расплавленное серебро —
+// поверхности с металлическим переливом и глянцевыми бликами.
+// Фирменный оранжевый BOOOMERANGS — единственный цветовой акцент (CTA).
 export const colors = {
-  bg: "#0b0b0f",
-  surface: "#141419",
-  surfaceAlt: "#1c1c23",
-  border: "#2a2a33",
-  text: "#f4f4f5",
-  textMuted: "#9a9aa3",
-  accent: "#ff5a1f",
+  bg: "#0a0a0c",
+  surface: "#17181d",
+  surfaceAlt: "#22242b",
+  border: "#4a4f5a",
+  text: "#f2f4f8",
+  textMuted: "#9ba1ac",
+
+  // Акценты
+  accent: "#ff5a1f", // фирменный оранжевый — основной CTA
   accentSoft: "#2a1610",
-  danger: "#ef4444",
-  success: "#22c55e",
-  warning: "#f59e0b",
-  info: "#38bdf8",
+  accent2: "#c9ced8", // серебро — ИИ-блоки, hero
+
+  // Градиенты (стоп-цвета для LinearGradient)
+  gradPrimary: ["#ff7a3d", "#ff5a1f"] as const, // оранжевое пламя
+  gradCosmic: ["#5a606c", "#191b21"] as const, // расплавленное серебро (hero)
+  gradCard: ["#2c2f37", "#16171c"] as const, // жидкий металл (карточки)
+  gradAi: ["#eceef3", "#9aa1ae"] as const, // хром
+
+  glowAccent: "rgba(255,90,31,0.35)",
+  glowViolet: "rgba(220,228,242,0.40)", // серебристое свечение расплава
+
+  danger: "#ff5470",
+  success: "#34e5a1",
+  warning: "#ffb648",
+  info: "#53c8ff",
   white: "#ffffff",
 } as const;
 
@@ -25,9 +40,9 @@ export const spacing = {
 } as const;
 
 export const radius = {
-  sm: 8,
-  md: 12,
-  lg: 16,
+  sm: 10,
+  md: 14,
+  lg: 18,
   xl: 24,
 } as const;
 
