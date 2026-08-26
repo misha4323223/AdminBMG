@@ -2,9 +2,12 @@ import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
+import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, InlineError, LoadingView, SectionTitle } from "@/components/ui";
 import { apiDelete, apiGet, apiPatch, apiPost, getErrorMessage } from "@/lib/api";
+import { recordRecent } from "@/lib/recent";
+import { copyText } from "@/lib/clipboard";
 import { formatDate, formatDateTime, formatRub, orderStatusLabel } from "@/lib/format";
 import { orderItemImage } from "@/lib/images";
 import type { Order } from "@/lib/types";
@@ -40,7 +43,10 @@ export default function OrderDetailScreen() {
         ]);
         const all = [...(orders || []), ...(drafts || [])];
         const found = all.find((o) => String(o.id) === String(id));
-        if (found) setOrder(found);
+        if (found) {
+          setOrder(found);
+          void recordRecent("order", Number(id), `Заказ #${found.orderNumber ?? id}`);
+        }
         else setError("Заказ не найден");
       } catch (e) {
         setError(getErrorMessage(e));
@@ -274,11 +280,30 @@ export default function OrderDetailScreen() {
 }
 
 function InfoRow({ label, value }: { label: string; value?: string | number | null }) {
+  const [copied, setCopied] = useState(false);
   if (value == null || value === "") return null;
+  const text = String(value);
   return (
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{String(value)}</Text>
+      <Pressable
+        style={styles.infoValueWrap}
+        onPress={async () => {
+          if (await copyText(text)) {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1400);
+          }
+        }}
+      >
+        <Text style={styles.infoValue} numberOfLines={2}>
+          {text}
+        </Text>
+        <Ionicons
+          name={copied ? "checkmark" : "copy-outline"}
+          size={14}
+          color={copied ? colors.success : colors.textMuted}
+        />
+      </Pressable>
     </View>
   );
 }
@@ -343,6 +368,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flexShrink: 1,
     textAlign: "right",
+  },
+  infoValueWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+    marginLeft: spacing.md,
   },
   item: {
     flexDirection: "row",

@@ -3,6 +3,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { SchemaEditor } from "@/components/SchemaEditor";
+import { PinnedProductsEditor } from "@/components/PinnedProductsEditor";
 import { Badge, Button, EmptyState, InlineError, LoadingView } from "@/components/ui";
 import { apiDelete, apiGet, apiPost, getErrorMessage } from "@/lib/api";
 import { colors, radius, spacing } from "@/constants/theme";
@@ -130,6 +131,12 @@ function sectionName(id: string, data: Record<string, unknown>): string {
     return t ? t.name : id;
   }
   return id;
+}
+
+function omitKeys(obj: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out = { ...obj };
+  for (const key of keys) delete out[key];
+  return out;
 }
 
 export default function HomeSectionsScreen() {
@@ -296,18 +303,34 @@ export default function HomeSectionsScreen() {
                 ) : null}
               </View>
 
-              {selected === id ? (
-                <View style={styles.cardBody}>
-                  {id === "artists" ? (
-                    <ArtistsOrderEditor value={draft} onChange={setDraft} />
-                  ) : null}
-                  <SchemaEditor value={draft} onChange={setDraft} />
-                  <View style={styles.actions}>
-                    <Button title="Сохранить секцию" onPress={saveSection} loading={saving} icon="save-outline" />
-                    <Button title="Закрыть" variant="ghost" onPress={() => { setSelected(null); setDraft(null); }} />
+              {selected === id ? (() => {
+                const pinnedObj = (draft && typeof draft === "object" ? draft : {}) as Record<string, unknown>;
+                const isPinnedSection = id === "popular" || pinnedObj.type === "custom_hits";
+                return (
+                  <View style={styles.cardBody}>
+                    {isPinnedSection ? (
+                      <PinnedProductsEditor value={pinnedObj} onChange={(next) => setDraft(next)} />
+                    ) : null}
+                    {id === "artists" ? (
+                      <ArtistsOrderEditor value={draft} onChange={setDraft} />
+                    ) : null}
+                    <SchemaEditor
+                      value={isPinnedSection ? omitKeys(pinnedObj, ["mode", "pinnedProductIds"]) : draft}
+                      onChange={(next) =>
+                        setDraft(
+                          isPinnedSection
+                            ? { ...pinnedObj, ...(next as Record<string, unknown>) }
+                            : next,
+                        )
+                      }
+                    />
+                    <View style={styles.actions}>
+                      <Button title="Сохранить секцию" onPress={saveSection} loading={saving} icon="save-outline" />
+                      <Button title="Закрыть" variant="ghost" onPress={() => { setSelected(null); setDraft(null); }} />
+                    </View>
                   </View>
-                </View>
-              ) : null}
+                );
+              })() : null}
             </View>
           );
         })

@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,6 +11,7 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, font, spacing } from "@/constants/theme";
+import { OfflineBanner } from "@/components/OfflineBanner";
 
 interface ScreenProps {
   title: string;
@@ -30,16 +32,15 @@ export function Screen({
   right,
   scroll = true,
   headerExtra,
-  backTo = "/",
+  backTo = "/(admin)",
   hideBack = false,
   children,
 }: ScreenProps) {
   const router = useRouter();
-  const canGoBack = router.canGoBack();
   const showBack = !hideBack;
 
   const goBack = () => {
-    if (canGoBack) {
+    if (router.canGoBack()) {
       router.back();
     } else {
       router.replace(backTo);
@@ -70,17 +71,23 @@ export function Screen({
     </View>
   );
 
+  // ПК/широкий экран: контент не растягивается «огромным телефоном»,
+  // а ограничивается удобной шириной и центрируется.
+  const wideWrap = Platform.OS === "web" ? styles.wide : undefined;
+
   if (!scroll) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
+        <OfflineBanner />
         {header}
-        <View style={styles.body}>{children}</View>
+        <View style={[styles.body, wideWrap]}>{children}</View>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
+      <OfflineBanner />
       {header}
       <ScrollView
         style={styles.scroll}
@@ -88,7 +95,7 @@ export function Screen({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {children}
+        <View style={wideWrap}>{children}</View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -147,5 +154,10 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
+  },
+  wide: {
+    width: "100%",
+    maxWidth: 1100,
+    alignSelf: "center",
   },
 });

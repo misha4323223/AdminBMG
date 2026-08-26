@@ -4,6 +4,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,10 +14,13 @@ import {
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useAuth } from "@/context/AuthContext";
+import { biometricsSupported, useAuth } from "@/context/AuthContext";
 import { Button, InlineError } from "@/components/ui";
 import { Splash } from "@/components/Splash";
+import { getBioCredentials } from "@/lib/storage";
+import { hapticSuccess, hapticWarning } from "@/lib/haptics";
 import { colors, font, radius, spacing } from "@/constants/theme";
+import * as LocalAuthentication from "expo-local-authentication";
 
 const LOGO = require("@/assets/logo-light.png");
 
@@ -24,7 +28,7 @@ type Field = "email" | "password" | "apiKey" | null;
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, user, isLoading } = useAuth();
+  const { login, user, isLoading, hasBiometricCredentials } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -32,6 +36,11 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [focused, setFocused] = useState<Field>(null);
   const [showSplash, setShowSplash] = useState(true);
+  const [bioBusy, setBioBusy] = useState(false);
+
+  // Доступна ли биометрия: нативная платформа + сохранённые данные.
+  const bioAvailable =
+    !isLoading && biometricsSupported() && hasBiometricCredentials && !user;
 
   // Плавное появление формы после заставки
   const formOpacity = useRef(new Animated.Value(0)).current;
@@ -51,6 +60,40 @@ export default function LoginScreen() {
       router.replace("/(admin)");
     }
   }, [isLoading, user, router]);
+
+  // Вход по биометрии: отпечаток/FaceID → автологин по сохранённым данным.
+  const loginWithBiometrics = async () => {
+    if (bioBusy) return;
+    setError("");
+    setBioBusy(true);
+    try {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!hasHardware || !enrolled) {
+        setError("Биометрия не настроена на этом устройстве — войдите вручную");
+        hapticWarning();
+        return;
+      }
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: "Вход в админку BOOOM",
+        cancelLabel: "Отмена",
+      });
+      if (!result.success) return; // пользователь отменил — молча
+      const creds = await getBioCredentials();
+      if (!creds) {
+        setError("Сохранённые данные не найдены — войдите вручную");
+        return;
+      }
+      await login(creds.email, creds.password, creds.apiKey);
+      hapticSuccess();
+      router.replace("/(admin)");
+    } catch (e) {
+      setError((e as Error)?.message || "Ошибка биометрического входа");
+      hapticWarning();
+    } finally {
+      setBioBusy(false);
+    }
+  };
 
   const submit = async () => {
     setError("");
@@ -169,6 +212,24 @@ export default function LoginScreen() {
                 icon="arrow-forward"
               />
             </View>
+
+            {bioAvailable ? (
+              <Pressable
+                onPress={loginWithBiometrics}
+                disabled={bioBusy || busy}
+                style={({ pressed }) => [
+                  styles.bioButton,
+                  (pressed || bioBusy) && { opacity: 0.75 },
+                ]}
+              >
+                <Ionicons
+                  name="finger-print-outline"
+                  size={18}
+                  color={colors.accent}
+                />
+                <Text style={styles.bioText}>Войти по отпечатку</Text>
+              </Pressable>
+            ) : null}
           </Animated.View>
 
           <Animated.Text style={[styles.hint, { opacity: formOpacity }]}>
@@ -253,6 +314,23 @@ const styles = StyleSheet.create({
   },
   submitWrap: {
     marginTop: spacing.lg,
+  },
+  bioButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+  },
+  bioText: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: "700",
   },
   hint: {
     color: colors.textMuted,

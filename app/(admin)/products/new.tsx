@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
+import { DropZone } from "@/components/DropZone";
 import { Accordion } from "@/components/Accordion";
 import { Button, Card, Field, InlineError, SectionTitle, SeoCounter } from "@/components/ui";
 import { SelectField } from "@/components/SelectField";
 import { SizesEditor, type SizesValue } from "@/components/SizesEditor";
 import { apiGet, apiPost, getErrorMessage, uploadImage } from "@/lib/api";import { subcategoriesFor, subSubsFor, useCategories } from "@/lib/categories";
+import { clearStoredDraft, getStoredDraft, setStoredDraft } from "@/lib/storage";
+import { registerHotkey } from "@/lib/hotkeys";
 import { colors, radius, spacing } from "@/constants/theme";
 
 const EMPTY_SIZES: SizesValue = {
@@ -56,6 +59,115 @@ export default function NewProductScreen() {
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // ─── Черновик: автосохранение незавершённой формы ────────────────
+  const DRAFT_KEY = "new_product";
+
+  // Применяет сохранённые значения черновика к форме.
+  const applyDraft = (d: Record<string, unknown>) => {
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    const num = (v: unknown) => (typeof v === "number" ? String(v) : str(v));
+    setName(str(d.name));
+    setPrice(num(d.price));
+    setCategory(str(d.category));
+    setSubcategory(str(d.subcategory));
+    setSubSubcategory(str(d.subSubcategory));
+    setColor(str(d.color));
+    setDescription(str(d.description));
+    setSku(str(d.sku));
+    setWholesalePrice(num(d.wholesalePrice));
+    setVideoUrl(str(d.videoUrl));
+    setBadgeText(str(d.badgeText));
+    setIsNew(d.isNew === true);
+    setDiscountPercent(num(d.discountPercent));
+    setWholesaleDiscountPercent(num(d.wholesaleDiscountPercent));
+    setComposition(str(d.composition));
+    setCareInstructions(str(d.careInstructions));
+    setNote(str(d.note));
+    setDelivery(str(d.delivery));
+    setReturnPolicy(str(d.returnPolicy));
+    setSpecsHtml(str(d.specsHtml));
+    setSeoTitle(str(d.seoTitle));
+    setSeoDescription(str(d.seoDescription));
+    setSeoBody(str(d.seoBody));
+    setLookCategory(str(d.lookCategory));
+    setLookSubcategory(str(d.lookSubcategory));
+    setPreorderGroup(str(d.preorderGroup));
+    setArtistSlug(str(d.artistSlug));
+    if (d.sizes && Array.isArray(d.sizes)) setSizes((prev) => ({ ...prev, sizes: d.sizes as string[] }));
+    if (d.sizeStock && typeof d.sizeStock === "object")
+      setSizes((prev) => ({ ...prev, sizeStock: d.sizeStock as Record<string, number> }));
+    if (d.sizeDiscounts && typeof d.sizeDiscounts === "object")
+      setSizes((prev) => ({ ...prev, sizeDiscounts: d.sizeDiscounts as Record<string, number> }));
+    if (typeof d.noSize === "boolean") setSizes((prev) => ({ ...prev, noSize: d.noSize as boolean }));
+  };
+
+  useEffect(() => {
+    (async () => {
+      const d = await getStoredDraft(DRAFT_KEY);
+      if (!d) return;
+      if (Platform.OS === "web") {
+        // На web Alert не работает — применяем молча.
+        applyDraft(d);
+        return;
+      }
+      Alert.alert(
+        "Найден черновик",
+        "Продолжить редактирование несохранённого товара?",
+        [
+          { text: "Начать заново", style: "destructive", onPress: () => void clearStoredDraft(DRAFT_KEY) },
+          { text: "Продолжить", onPress: () => applyDraft(d) },
+        ],
+        { cancelable: false },
+      );
+    })();
+  }, []);
+
+  // Дебаунс-автосохранение всех полей формы (без фото — они тяжёлые).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void setStoredDraft(DRAFT_KEY, {
+        name,
+        price,
+        category,
+        subcategory,
+        subSubcategory,
+        color,
+        description,
+        sku,
+        wholesalePrice,
+        videoUrl,
+        badgeText,
+        isNew,
+        discountPercent,
+        wholesaleDiscountPercent,
+        composition,
+        careInstructions,
+        note,
+        delivery,
+        returnPolicy,
+        specsHtml,
+        seoTitle,
+        seoDescription,
+        seoBody,
+        lookCategory,
+        lookSubcategory,
+        preorderGroup,
+        artistSlug,
+        sizes: sizes.sizes,
+        sizeStock: sizes.sizeStock,
+        sizeDiscounts: sizes.sizeDiscounts,
+        noSize: sizes.noSize,
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [
+    name, price, category, subcategory, subSubcategory, color,
+    description, sku, wholesalePrice, videoUrl, badgeText, isNew,
+    discountPercent, wholesaleDiscountPercent, composition, careInstructions,
+    note, delivery, returnPolicy, specsHtml, seoTitle, seoDescription, seoBody,
+    lookCategory, lookSubcategory, preorderGroup, artistSlug, sizes,
+  ]);
 
   useEffect(() => {
     (async () => {
@@ -145,6 +257,7 @@ export default function NewProductScreen() {
         imageUrl: images[0],
       };
       await apiPost("/admin/products", body);
+      await clearStoredDraft(DRAFT_KEY);
       router.back();
     } catch (e) {
       setError(getErrorMessage(e));
@@ -153,6 +266,13 @@ export default function NewProductScreen() {
     }
   };
 
+  // ПК: Ctrl+S — создать товар.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    return registerHotkey("new-product-save", { key: "s", ctrl: true }, () => void save(), 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const subcategories = category ? subcategoriesFor(categories, category) : [];
   const subSubs = subcategory ? subSubsFor(categories, category, subcategory) : [];
 
@@ -160,7 +280,26 @@ export default function NewProductScreen() {
     <Screen title="Новый товар" scroll>
       <InlineError text={error} />
 
-      <Card style={styles.card}>
+      <DropZone
+        onFiles={async (files) => {
+          setUploading(true);
+          setError("");
+          try {
+            const urls: string[] = [];
+            for (const file of files.slice(0, 8)) {
+              urls.push(await uploadImage(file.uri, file.name || undefined));
+            }
+            setImages((prev) => [...prev, ...urls]);
+          } catch (e) {
+            setError(getErrorMessage(e));
+          } finally {
+            setUploading(false);
+          }
+        }}
+        hint="Отпустите, чтобы загрузить фото"
+        style={styles.card}
+      >
+      <Card style={styles.cardInner}>
         <SectionTitle>Фото</SectionTitle>
         <View style={styles.imageRow}>
           {images.map((uri, i) => (
@@ -180,6 +319,7 @@ export default function NewProductScreen() {
         </View>
         {uploading ? <Text style={styles.hint}>Загрузка…</Text> : null}
       </Card>
+      </DropZone>
 
       <Accordion title="Основное" icon="cube-outline" defaultOpen>
         <Field label="Название *" value={name} onChangeText={setName} />
@@ -298,6 +438,7 @@ function Toggle({ label, value, onValueChange }: { label: string; value: boolean
 
 const styles = StyleSheet.create({
   card: { marginBottom: spacing.md },
+  cardInner: { marginBottom: 0 },
   imageRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   image: { width: 64, height: 64, borderRadius: radius.sm, backgroundColor: colors.surfaceAlt },
   remove: {

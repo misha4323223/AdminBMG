@@ -9,13 +9,17 @@ import React, {
 import { api } from "@/lib/api";
 import {
   clearAuth,
+  clearBioCredentials,
+  getBioCredentials,
   getStoredApiKey,
   getStoredToken,
   getStoredUser,
+  setBioCredentials,
   storeApiKey,
   storeToken,
   storeUser,
 } from "@/lib/storage";
+import { Platform } from "react-native";
 import type { AdminUser } from "@/lib/types";
 
 interface AuthContextValue {
@@ -24,6 +28,8 @@ interface AuthContextValue {
   login: (email: string, password: string, apiKey: string) => Promise<void>;
   logout: () => Promise<void>;
   isAdmin: boolean;
+  /** Есть ли сохранённые данные для биометрического входа (только натив). */
+  hasBiometricCredentials: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -32,11 +38,23 @@ const AuthContext = createContext<AuthContextValue>({
   login: async () => {},
   logout: async () => {},
   isAdmin: false,
+  hasBiometricCredentials: false,
 });
+
+/** Биометрический вход доступен только на нативных платформах. */
+export function biometricsSupported(): boolean {
+  return Platform.OS === "ios" || Platform.OS === "android";
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AdminUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasBiometricCredentials, setHasBiometricCredentials] = useState(false);
+
+  useEffect(() => {
+    if (!biometricsSupported()) return;
+    getBioCredentials().then((c) => setHasBiometricCredentials(!!c));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -101,16 +119,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     await storeUser(JSON.stringify(loginUser));
     setUser(loginUser);
+
+    // Сохраняем учётные данные для быстрого биометрического входа в следующий раз.
+    if (biometricsSupported()) {
+      await setBioCredentials({ email: email.trim().toLowerCase(), password, apiKey: apiKey.trim() });
+      setHasBiometricCredentials(true);
+    }
   }, []);
 
   const logout = useCallback(async () => {
     await clearAuth();
+    await clearBioCredentials();
+    setHasBiometricCredentials(false);
     setUser(null);
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, isLoading, login, logout, isAdmin: user?.role === "admin" }),
-    [user, isLoading, login, logout],
+    () => ({
+      user,
+      isLoading,
+      login,
+      logout,
+      isAdmin: user?.role === "admin",
+      hasBiometricCredentials,
+    }),
+    [user, isLoading, login, logout, hasBiometricCredentials],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

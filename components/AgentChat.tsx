@@ -310,13 +310,14 @@ export function AgentChat({
           style={styles.composerInput}
           multiline
           onSubmitEditing={() => send()}
-          /* Web: Enter — отправить, Shift+Enter — новая строка */
+          /* Web: Enter (или Ctrl+Enter) — отправить, Shift+Enter — новая строка */
           onKeyPress={(e) => {
-            if (
-              Platform.OS === "web" &&
-              e.nativeEvent.key === "Enter" &&
-              !(e.nativeEvent as unknown as { shiftKey?: boolean }).shiftKey
-            ) {
+            if (Platform.OS !== "web") return;
+            const meta = e.nativeEvent as unknown as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean };
+            const isEnter = e.nativeEvent.key === "Enter";
+            const isPlainEnter = isEnter && !meta.shiftKey && !meta.ctrlKey && !meta.metaKey;
+            const isCtrlEnter = isEnter && (meta.ctrlKey || meta.metaKey);
+            if (isPlainEnter || isCtrlEnter) {
               e.preventDefault();
               send();
             }

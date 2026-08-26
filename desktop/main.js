@@ -1,7 +1,79 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, shell } = require("electron");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
+const zlib = require("zlib");
+
+/** 16×16 PNG с кругом цвета #d7dfee — иконка трея, генерируется на лету. */
+function trayIcon() {
+  const size = 16;
+  const cx = 8, cy = 8, r = 6.2;
+  const rows = [];
+  for (let y = 0; y < size; y++) {
+    let row = Buffer.alloc(size, 0);
+    for (let x = 0; x < size; x++) {
+      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (d <= r) {
+        // Замыленная кромка для сглаживания
+        const a = Math.max(0, Math.min(1, r - d + 0.7));
+        row[x] = Math.round(0xff * a);
+      }
+    }
+    rows.push(row);
+  }
+  const raw = Buffer.concat(rows.map((row, y) => {
+    const stride = size * 4 + 1;
+    const line = Buffer.alloc(stride);
+    line[0] = 0;
+    for (let x = 0; x < size; x++) {
+      const a = row[x];
+      line[1 + x * 4] = 0x0b; // R
+      line[1 + x * 4 + 1] = 0x0b; // G
+      line[1 + x * 4 + 2] = 0x0f; // B
+      line[1 + x * 4 + 3] = a; // A
+    }
+    return line;
+  }));
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // color type RGBA
+
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const typeBuf = Buffer.from(type, "ascii");
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])) >>> 0, 0);
+    return Buffer.concat([len, typeBuf, data, crc]);
+  };
+
+  const idat = zlib.deflateSync(raw);
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  return nativeImage.createFromBuffer(png);
+}
+
+function crc32(buf) {
+  let table = crc32.table;
+  if (!table) {
+    table = crc32.table = new Int32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c;
+    }
+  }
+  let c = 0xffffffff;
+  for (const b of buf) c = table[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) | 0;
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -159,6 +231,42 @@ function stripOriginForApi(session) {
   });
 }
 
+let tray = null;
+let mainWin = null;
+
+function buildTray(win) {
+  const icon = trayIcon();
+  tray = new Tray(icon);
+  tray.setToolTip("BOOOMERANGS Админка");
+  tray.setContextMenu(buildTrayMenu(win));
+  tray.on("click", () => { win.show(); win.focus(); });
+}
+
+function setupIpc(win) {
+  ipcMain.on("admin:toggle-always-on-top", () => {
+    win.setAlwaysOnTop(!win.isAlwaysOnTop());
+    if (tray) tray.setContextMenu(buildTrayMenu(win));
+  });
+  ipcMain.on("admin:minimize-to-tray", () => {
+    win.hide();
+  });
+}
+
+function buildTrayMenu(win) {
+  const menu = Menu.buildFromTemplate([
+    { label: "Открыть админку", click: () => { win.show(); win.focus(); } },
+    {
+      label: "Поверх всех окон",
+      type: "checkbox",
+      checked: win.isAlwaysOnTop(),
+      click: (item) => win.setAlwaysOnTop(item.checked),
+    },
+    { type: "separator" },
+    { label: "Выход", click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+  return menu;
+}
+
 async function createWindow(server) {
   const win = new BrowserWindow({
     width: 1280,
@@ -173,8 +281,10 @@ async function createWindow(server) {
       nodeIntegration: false,
       sandbox: false,
       webSecurity: false,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
+  mainWin = win;
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) shell.openExternal(url);
@@ -188,9 +298,19 @@ async function createWindow(server) {
   });
 
   stripOriginForApi(win.webContents.session);
+  setupIpc(win);
+
+  // Закрытие окна — в трей, а не выход (кроме явного «Выход»).
+  win.on("close", (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
 
   const address = server.address();
   await win.loadURL(`http://127.0.0.1:${address.port}`);
+  buildTray(win);
 }
 
 app.whenReady().then(async () => {
@@ -202,5 +322,6 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  // Окно скрывается в трей, а не закрывается — приложение живёт в фоне.
+  if (process.platform !== "darwin" && app.isQuitting) app.quit();
 });

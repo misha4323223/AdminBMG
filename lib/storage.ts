@@ -93,6 +93,60 @@ export async function storeUser(user: string): Promise<void> {
   } catch {}
 }
 
+// ─── Учётные данные для быстрого биометрического входа ─────────────
+// Хранятся в SecureStore (натив) / localStorage (web). Используются только
+// после успешной проверки биометрии на устройстве.
+
+interface BioCredentials {
+  email: string;
+  password: string;
+  apiKey: string;
+}
+
+const BIO_CRED_KEY = "admin_biometric_credentials";
+
+export async function getBioCredentials(): Promise<BioCredentials | null> {
+  const data = await getStoredJson(BIO_CRED_KEY);
+  if (!data || typeof data !== "object") return null;
+  const c = data as Partial<BioCredentials>;
+  if (!c.email || !c.password || !c.apiKey) return null;
+  return c as BioCredentials;
+}
+
+export async function setBioCredentials(creds: BioCredentials): Promise<void> {
+  await setStoredJson(BIO_CRED_KEY, creds);
+}
+
+export async function clearBioCredentials(): Promise<void> {
+  try {
+    if (Platform.OS === "web") webRemove(BIO_CRED_KEY);
+    else await SecureStore.deleteItemAsync(BIO_CRED_KEY);
+  } catch {}
+}
+
+// ─── Черновики (автосохранение незавершённых форм) ────────────────
+
+export async function getStoredDraft(
+  key: string,
+): Promise<Record<string, unknown> | null> {
+  const data = await getStoredJson(`draft_${key}`);
+  return data && typeof data === "object"
+    ? (data as Record<string, unknown>)
+    : null;
+}
+
+export async function setStoredDraft(key: string, value: unknown): Promise<void> {
+  await setStoredJson(`draft_${key}`, value);
+}
+
+export async function clearStoredDraft(key: string): Promise<void> {
+  try {
+    const full = `draft_${key}`;
+    if (Platform.OS === "web") webRemove(full);
+    else await SecureStore.deleteItemAsync(full);
+  } catch {}
+}
+
 export async function clearAuth(): Promise<void> {
   try {
     if (Platform.OS === "web") {

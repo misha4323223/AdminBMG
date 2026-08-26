@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -21,6 +23,8 @@ import {
   SectionTitle,
 } from "@/components/ui";
 import { SelectField } from "@/components/SelectField";
+import { FilterChips, type FilterChipOption } from "@/components/FilterChips";
+import { ListSkeleton } from "@/components/Skeletons";
 import { exportExcel } from "@/lib/export";
 import { apiDelete, apiGet, apiPatch, apiPost, getErrorMessage } from "@/lib/api";
 import { formatDateTime, formatRub, orderStatusLabel } from "@/lib/format";
@@ -150,21 +154,62 @@ function OrdersList({
   onOpenDetail: (id: number) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [sortMode, setSortMode] = useState<"new" | "old" | "sum">("new");
+  const { width } = useWindowDimensions();
+  // ПК: на широких экранах — таблица вместо карточек.
+  const tableMode = Platform.OS === "web" && width >= 900;
+
+  // Чипы статусов: только те, что реально есть в списке + «Все».
+  const statusOptions = useMemo<FilterChipOption[]>(() => {
+    const counts = new Map<string, number>();
+    for (const o of orders) {
+      const key = String(o.status || "").toLowerCase() || "unknown";
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const opts: FilterChipOption[] = [
+      { key: "all", label: "Все", count: orders.length },
+    ];
+    // Сначала важные статусы (новый/обработка), потом остальные по алфавиту.
+    const priority = ["new", "processing", "paid", "pending"];
+    const keys = [...counts.keys()].sort((a, b) => {
+      const pa = priority.indexOf(a);
+      const pb = priority.indexOf(b);
+      if (pa !== -1 || pb !== -1) return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+      return orderStatusLabel(a).localeCompare(orderStatusLabel(b), "ru");
+    });
+    for (const k of keys) {
+      opts.push({ key: k, label: orderStatusLabel(k), count: counts.get(k) });
+    }
+    return opts;
+  }, [orders]);
 
   const filtered = useMemo(() => {
+    let list = orders;
+    if (statusFilter && statusFilter !== "all") {
+      list = list.filter(
+        (o) => (String(o.status || "").toLowerCase() || "unknown") === statusFilter,
+      );
+    }
     const q = query.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter((o) =>
-      [o.customerName, o.customerEmail, o.customerPhone, String(o.id)]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q)),
+    if (q) {
+      list = list.filter((o) =>
+        [o.customerName, o.customerEmail, o.customerPhone, String(o.id)]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q)),
+      );
+    }
+    const byDate = (o: Order) => new Date(o.createdAt || 0).getTime();
+    const bySum = (o: Order) => Number(o.total || 0);
+    return [...list].sort((a, b) =>
+      sortMode === "sum" ? bySum(b) - bySum(a) : sortMode === "old" ? byDate(a) - byDate(b) : byDate(b) - byDate(a),
     );
-  }, [orders, query]);
+  }, [orders, query, statusFilter, sortMode]);
 
   if (loading && orders.length === 0) {
     return (
       <View style={styles.flex}>
-        <LoadingView />
+        <ListSkeleton rows={6} />
       </View>
     );
   }
@@ -179,6 +224,15 @@ function OrdersList({
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
         <View style={styles.headerBlock}>
+          {tableMode ? (
+            <View style={styles.tableHead}>
+              <Text style={[styles.tableCell, styles.tableId]}>№</Text>
+              <Text style={[styles.tableCell, styles.tableDate]}>Дата</Text>
+              <Text style={[styles.tableCell, styles.tableClient]}>Клиент</Text>
+              <Text style={[styles.tableCell, styles.tableSum]}>Сумма</Text>
+              <Text style={[styles.tableCell, styles.tableStatus]}>Статус</Text>
+            </View>
+          ) : null}
           <InlineError text={error} />
           <TextInput
             value={query}
@@ -187,19 +241,75 @@ function OrdersList({
             placeholderTextColor={colors.textMuted}
             style={styles.search}
           />
+          <FilterChips
+            options={statusOptions}
+            value={statusFilter ?? "all"}
+            onChange={(key) => setStatusFilter(key)}
+          />
+          <View style={styles.sortRow}>
+            {(["new", "old", "sum"] as const).map((mode) => (
+              <Pressable
+                key={mode}
+                onPress={() => setSortMode(mode)}
+                style={[styles.sortBtn, sortMode === mode && styles.sortBtnActive]}
+              >
+                <Ionicons
+                  name={mode === "sum" ? "cash-outline" : mode === "old" ? "arrow-up-outline" : "arrow-down-outline"}
+                  size={12}
+                  color={sortMode === mode ? colors.accent : colors.textMuted}
+                />
+                <Text style={[styles.sortText, sortMode === mode && styles.sortTextActive]}>
+                  {mode === "new" ? "Сначала новые" : mode === "old" ? "Сначала старые" : "По сумме"}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
           <Text style={styles.hint}>
             Нажмите на карточку, чтобы открыть полный заказ. Кнопки «Товары», «СДЭК» и «Excel»
             работают прямо из списка.
           </Text>
         </View>
       }
-      renderItem={({ item }) => (
-        <OrderCard order={item} onOpenDetail={onOpenDetail} onReload={reload} />
-      )}
+      renderItem={({ item }) =>
+        tableMode ? (
+          <OrderTableRow order={item} onOpenDetail={onOpenDetail} />
+        ) : (
+          <OrderCard order={item} onOpenDetail={onOpenDetail} onReload={reload} />
+        )
+      }
       ListEmptyComponent={
         <EmptyState text={error ? "Ошибка загрузки" : "Заказов нет"} />
       }
     />
+  );
+}
+
+/** Строка таблицы для широких экранов (ПК). */
+function OrderTableRow({
+  order,
+  onOpenDetail,
+}: {
+  order: Order;
+  onOpenDetail: (id: number) => void;
+}) {
+  const sum = formatRub(Number(order.total || 0));
+  return (
+    <Pressable
+      onPress={() => onOpenDetail(order.id)}
+      style={({ pressed }) => [styles.tableRow, pressed && { opacity: 0.7 }]}
+    >
+      <Text style={[styles.tableCell, styles.tableId]}>{order.orderNumber ?? order.id}</Text>
+      <Text style={[styles.tableCell, styles.tableDate]}>
+        {formatDateTime(order.createdAt)}
+      </Text>
+      <Text style={[styles.tableCell, styles.tableClient]} numberOfLines={1}>
+        {order.customerName || "—"}
+      </Text>
+      <Text style={[styles.tableCell, styles.tableSum]}>{sum}</Text>
+      <View style={styles.tableStatus}>
+        <StatusBadge status={order.status} />
+      </View>
+    </Pressable>
   );
 }
 
@@ -764,6 +874,33 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   hint: { color: colors.textMuted, fontSize: 12, lineHeight: 17 },
+  sortRow: {
+    flexDirection: "row",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  sortBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  sortBtnActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  sortText: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  sortTextActive: {
+    color: colors.accent,
+  },
   search: {
     backgroundColor: colors.surfaceAlt,
     borderColor: colors.border,
@@ -773,7 +910,36 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     color: colors.text,
     fontSize: 15,
+    marginBottom: spacing.sm,
   },
+  tableHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    marginBottom: 2,
+  },
+  tableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(201, 206, 216, 0.12)",
+  },
+  tableCell: {
+    color: colors.text,
+    fontSize: 13,
+  },
+  tableId: { width: 80 },
+  tableDate: { width: 170 },
+  tableClient: { flex: 1, paddingRight: spacing.md },
+  tableSum: { width: 120, textAlign: "right", fontWeight: "700" },
+  tableStatus: { width: 160, alignItems: "flex-start" },
   orderCard: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,

@@ -1,5 +1,6 @@
 import axios, { AxiosError, type AxiosRequestConfig } from "axios";
 import { getStoredApiKey, getStoredToken } from "./storage";
+import { logger } from "./logger";
 
 // Единый base URL: все пути в коде относительны (например "/admin/products").
 // Для локальной разработки можно переопределить через EXPO_PUBLIC_API_URL.
@@ -23,6 +24,25 @@ api.interceptors.request.use(async (config) => {
   }
   return config;
 });
+
+// Упавшие запросы автоматически попадают в журнал «Диагностики».
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (axios.isAxiosError(error)) {
+      const method = (error.config?.method || "get").toUpperCase();
+      const url = error.config?.url || "?";
+      const status = error.response?.status;
+      if (!error.response) {
+        logger.error(`${method} ${url} — нет связи с сервером`, "api");
+      } else if (status !== 401 && status !== 404) {
+        // 401/404 не шумим: это частые ожидаемые ответы
+        logger.error(`${method} ${url} — HTTP ${status}`, "api");
+      }
+    }
+    return Promise.reject(error);
+  },
+);
 
 export interface ApiErrorInfo {
   message: string;

@@ -8,7 +8,11 @@ import { AgentChat } from "@/components/AgentChat";
 import { StatCard } from "@/components/ui";
 import { useAuth } from "@/context/AuthContext";
 import { apiGet } from "@/lib/api";
+import { getRecent, type RecentItem } from "@/lib/recent";
+import { isDesktop, minimizeToTray, notify, toggleAlwaysOnTop } from "@/lib/desktop";
+import { getStoredJson, setStoredJson } from "@/lib/storage";
 import { ADMIN_SECTIONS } from "@/lib/sections";
+import { hapticLight } from "@/lib/haptics";
 import { colors, radius, spacing } from "@/constants/theme";
 
 /** Быстрые действия для BOOOM AI на главной — только те операции,
@@ -68,12 +72,19 @@ interface AgentStatus {
 export default function Dashboard() {
   const router = useRouter();
   const { user, logout } = useAuth();
-  const { height: winHeight } = useWindowDimensions();
+  const { height: winHeight, width: winWidth } = useWindowDimensions();
   // Адаптивная высота чата: ~42% экрана, зажата в разумные границы
   const chatHeight = Math.min(520, Math.max(320, Math.round(winHeight * 0.42)));
+  // ПК: плитки разделов в 3 колонки, а не 2.
+  const wideCards = winWidth >= 900;
+  const cardWidth = wideCards ? "31%" : "48%";
   const [productsCount, setProductsCount] = useState<number | null>(null);
   const [ordersCount, setOrdersCount] = useState<number | null>(null);
   const [clientsCount, setClientsCount] = useState<number | null>(null);
+  /** Бейджи-счётчики на плитках разделов: что требует внимания. */
+  const [badges, setBadges] = useState<Record<string, number>>({});
+  /** Недавно открытые заказы/товары. */
+  const [recent, setRecent] = useState<RecentItem[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [autoCommand, setAutoCommand] = useState<string | null>(null);
 
@@ -90,6 +101,19 @@ export default function Dashboard() {
       try {
         const orders = await apiGet<unknown[]>("/admin/orders");
         setOrdersCount(orders.length);
+        // Новые заказы — бейдж на плитке «Заказы».
+        const fresh = orders.filter(
+          (o) => String((o as { status?: string })?.status || "").toLowerCase() === "new",
+        ).length;
+        if (fresh > 0) setBadges((b) => ({ ...b, orders: fresh }));
+        // ПК: системное уведомление о новых заказах (без опроса — только при
+        // открытии/обновлении главной, сравниваем с прошлым визитом).
+        const lastSeen = await getStoredJson("last_seen_new_orders");
+        const prev = typeof lastSeen === "number" ? lastSeen : null;
+        if (prev != null && fresh > prev) {
+          notify("BOOOM · Новые заказы", `Появилось ${fresh - prev} новых заказов`);
+        }
+        await setStoredJson("last_seen_new_orders", fresh);
       } catch {}
       try {
         const clients = await apiGet<{ users: unknown[] }>("/admin/users");
@@ -99,6 +123,12 @@ export default function Dashboard() {
         const status = await apiGet<AgentStatus>("/admin/autonomous-agent/status");
         setAgentStatus(status);
       } catch {}
+      try {
+        const reviews = await apiGet<{ isApproved?: boolean }[]>("/admin/reviews");
+        const pending = reviews.filter((r) => !r.isApproved).length;
+        if (pending > 0) setBadges((b) => ({ ...b, reviews: pending }));
+      } catch {}
+      setRecent(await getRecent());
     })();
   }, []);
 
@@ -108,9 +138,34 @@ export default function Dashboard() {
       subtitle={user ? `Вы вошли как ${user.name || user.email}` : undefined}
       hideBack
       right={
-        <Pressable onPress={logout} style={styles.logout} hitSlop={8}>
-          <Ionicons name="log-out-outline" size={20} color={colors.textMuted} />
-        </Pressable>
+        <View style={styles.headerRight}>
+          {isDesktop() ? (
+            <>
+              <Pressable
+                onPress={() => {
+                  hapticLight();
+                  toggleAlwaysOnTop();
+                }}
+                style={styles.logout}
+                hitSlop={8}
+                accessibilityLabel="Поверх всех окон"
+              >
+                <Ionicons name="pin-outline" size={19} color={colors.textMuted} />
+              </Pressable>
+              <Pressable
+                onPress={minimizeToTray}
+                style={styles.logout}
+                hitSlop={8}
+                accessibilityLabel="Свернуть в трей"
+              >
+                <Ionicons name="remove-outline" size={20} color={colors.textMuted} />
+              </Pressable>
+            </>
+          ) : null}
+          <Pressable onPress={logout} style={styles.logout} hitSlop={8}>
+            <Ionicons name="log-out-outline" size={20} color={colors.textMuted} />
+          </Pressable>
+        </View>
       }
     >
       {/* ── Hero: BOOOM AI ─────────────────────────────────────────── */}
@@ -194,16 +249,53 @@ export default function Dashboard() {
         <StatCard label="Клиентов" value={clientsCount ?? "—"} icon="people-outline" tone="success" />
       </View>
 
+      {recent.length > 0 ? (
+        <View style={styles.recentBlock}>
+          <Text style={styles.gridTitle}>Недавние</Text>
+          <View style={styles.recentRow}>
+            {recent.map((r) => (
+              <Pressable
+                key={`${r.type}-${r.id}`}
+                onPress={() =>
+                  router.push((r.type === "order" ? `/orders/${r.id}` : `/products/${r.id}`) as never)
+                }
+                style={({ pressed }) => [styles.recentChip, pressed && { opacity: 0.75 }]}
+              >
+                <Ionicons
+                  name={r.type === "order" ? "receipt-outline" : "shirt-outline"}
+                  size={13}
+                  color={colors.accent}
+                />
+                <Text style={styles.recentText} numberOfLines={1}>
+                  {r.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
       <Text style={styles.gridTitle}>Разделы админки</Text>
       <View style={styles.grid}>
         {ADMIN_SECTIONS.map((section) => (
           <Pressable
             key={section.key}
             onPress={() => router.push(section.route as never)}
-            style={({ pressed }) => [styles.sectionCard, pressed && { opacity: 0.8 }]}
+            style={({ pressed }) => [
+              styles.sectionCard,
+              { width: cardWidth },
+              pressed && { opacity: 0.8 },
+            ]}
           >
-            <View style={styles.sectionIcon}>
-              <Ionicons name={section.icon} size={20} color={colors.accent} />
+            <View style={styles.sectionIconRow}>
+              <View style={styles.sectionIcon}>
+                <Ionicons name={section.icon} size={20} color={colors.accent} />
+              </View>
+              {typeof badges[section.key] === "number" ? (
+                <View style={styles.sectionBadge}>
+                  <Text style={styles.sectionBadgeText}>{badges[section.key]}</Text>
+                </View>
+              ) : null}
             </View>
             <Text style={styles.sectionTitle}>{section.title}</Text>
             <Text style={styles.sectionDesc} numberOfLines={2}>
@@ -217,6 +309,11 @@ export default function Dashboard() {
 }
 
 const styles = StyleSheet.create({
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
   logout: {
     width: 36,
     height: 36,
@@ -372,13 +469,38 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginBottom: spacing.md,
   },
+  recentBlock: {
+    marginBottom: spacing.xl,
+  },
+  recentRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  recentChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: "100%",
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+  },
+  recentText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm,
   },
   sectionCard: {
-    width: "48%",
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
@@ -394,6 +516,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.sm,
+  },
+  sectionIconRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  sectionBadge: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    backgroundColor: colors.danger,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sectionBadgeText: {
+    color: colors.white,
+    fontSize: 11,
+    fontWeight: "800",
   },
   sectionTitle: {
     color: colors.text,

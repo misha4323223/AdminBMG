@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
+import { DragList } from "@/components/DragList";
+import { DropZone } from "@/components/DropZone";
 import { Accordion } from "@/components/Accordion";
 import { Button, Card, Field, InlineError, LoadingView, SectionTitle, SeoCounter } from "@/components/ui";
 import { SelectField } from "@/components/SelectField";
@@ -20,6 +22,9 @@ import {
   type MeasurementSection,
 } from "@/components/MeasurementsEditor";
 import { apiDelete, apiGet, apiPatch, getErrorMessage, uploadImage } from "@/lib/api";
+import { recordRecent } from "@/lib/recent";
+import { registerHotkey } from "@/lib/hotkeys";
+import { Platform } from "react-native";
 import { asText } from "@/lib/format";
 import {
   mergeCategoriesWithProducts,
@@ -217,6 +222,7 @@ export default function ProductDetailScreen() {
       try {
         const data = await apiGet<Product>(`/admin/products/${id}`);
         setProduct(data);
+        void recordRecent("product", Number(id), data.name || `Товар #${id}`);
         setForm(productToForm(data));
         setSizes({
           sizes: toArray(data.sizes),
@@ -378,6 +384,13 @@ export default function ProductDetailScreen() {
     }
   };
 
+  // ПК: Ctrl+S — сохранить товар.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    return registerHotkey("product-save", { key: "s", ctrl: true }, () => void save(), 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const remove = async () => {
     if (!confirmDelete) {
       setConfirmDelete(true);
@@ -391,6 +404,25 @@ export default function ProductDetailScreen() {
     } catch (e) {
       setError(getErrorMessage(e));
       setSaving(false);
+    }
+  };
+
+  // ПК: файлы, перетащенные из проводника.
+  const addDroppedImages = async (files: { uri: string; name: string }[]) => {
+    setUploading(true);
+    setError("");
+    try {
+      const urls: string[] = [];
+      for (const file of files.slice(0, 8)) {
+        urls.push(await uploadImage(file.uri, file.name || undefined));
+      }
+      const nextImages = [...images, ...urls];
+      await apiPatch(`/admin/products/${id}`, { images: nextImages });
+      setProduct((prev) => (prev ? { ...prev, images: nextImages, imageUrl: nextImages[0] } : prev));
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -449,6 +481,19 @@ export default function ProductDetailScreen() {
     }
   };
 
+  const reorderImages = async (nextImages: string[]) => {
+    if (nextImages.length === images.length && nextImages.every((uri, i) => uri === images[i])) {
+      return;
+    }
+    setError("");
+    try {
+      await apiPatch(`/admin/products/${id}`, { images: nextImages, imageUrl: nextImages[0] });
+      setProduct((prev) => (prev ? { ...prev, images: nextImages, imageUrl: nextImages[0] } : prev));
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  };
+
   const categoryOptions = Object.entries(mergedCategories).map(([slug, c]) => ({
     value: slug,
     label: c.name,
@@ -458,47 +503,71 @@ export default function ProductDetailScreen() {
     <Screen title={form.name || "Товар"} subtitle={`ID ${id}`} scroll>
       <InlineError text={error} />
 
-      <Card style={styles.photosCard}>
+      <DropZone
+        onFiles={addDroppedImages}
+        hint="Отпустите, чтобы загрузить фото"
+        style={styles.photosCard}
+      >
+      <Card style={styles.photosCardInner}>
         <SectionTitle>Фото</SectionTitle>
-        <View style={styles.imageRow}>
-          {images.slice(0, 10).map((uri, i) => (
-            <View key={i} style={styles.imgCell}>
+        <Text style={styles.hint}>
+          Удерживайте фото и перетаскивайте, чтобы изменить порядок. Первое фото — главное.
+        </Text>
+        <DragList
+          items={images}
+          keyExtractor={(uri) => uri}
+          onReorder={reorderImages}
+          itemHeight={76}
+          gap={10}
+          renderItem={(uri, i) => (
+            <View style={styles.imgRow}>
+              <Ionicons name="reorder-three-outline" size={20} color={colors.textMuted} />
               <Image source={{ uri }} style={styles.image} contentFit="cover" />
-              <Pressable style={styles.removeImg} onPress={() => removeImage(i)}>
-                <Ionicons name="close" size={12} color="#fff" />
-              </Pressable>
-              <View style={styles.imgMoveRow}>
+              <View style={styles.imgMeta}>
+                <Text style={styles.imgName} numberOfLines={1}>
+                  Фото {i + 1}
+                </Text>
+                {i === 0 ? <Text style={styles.imgMain}>Главное фото</Text> : null}
+              </View>
+              <View style={styles.imgArrowCol}>
                 <Pressable
                   style={[styles.imgMoveBtn, i === 0 && styles.imgMoveDisabled]}
                   disabled={i === 0}
                   onPress={() => moveImage(i, -1)}
                   hitSlop={4}
                 >
-                  <Ionicons name="chevron-back" size={14} color={i === 0 ? colors.textMuted : colors.text} />
+                  <Ionicons name="chevron-up" size={14} color={i === 0 ? colors.textMuted : colors.text} />
                 </Pressable>
-                <Text style={styles.imgIndex}>{i + 1}</Text>
                 <Pressable
                   style={[styles.imgMoveBtn, i === images.length - 1 && styles.imgMoveDisabled]}
                   disabled={i === images.length - 1}
                   onPress={() => moveImage(i, 1)}
                   hitSlop={4}
                 >
-                  <Ionicons name="chevron-forward" size={14} color={i === images.length - 1 ? colors.textMuted : colors.text} />
+                  <Ionicons name="chevron-down" size={14} color={i === images.length - 1 ? colors.textMuted : colors.text} />
                 </Pressable>
               </View>
+              <Pressable style={styles.removeImg} onPress={() => removeImage(i)} hitSlop={8}>
+                <Ionicons name="close" size={18} color={colors.danger} />
+              </Pressable>
             </View>
-          ))}
-          {images.length < 10 ? (
-            <Pressable style={styles.addImage} onPress={pickImage}>
-              <Ionicons name="add" size={24} color={colors.accent} />
-            </Pressable>
-          ) : null}
-        </View>
-        <Text style={styles.hint}>
-          Первое фото — главное. Стрелками ← → меняйте порядок фото.
-        </Text>
+          )}
+        />
+        {images.length < 10 ? (
+          <Pressable style={styles.addImage} onPress={pickImage} disabled={uploading}>
+            {uploading ? (
+              <ActivityIndicator color={colors.accent} />
+            ) : (
+              <>
+                <Ionicons name="add" size={20} color={colors.accent} />
+                <Text style={styles.addImageText}>Добавить фото</Text>
+              </>
+            )}
+          </Pressable>
+        ) : null}
         {uploading ? <Text style={styles.hint}>Загрузка…</Text> : null}
       </Card>
+      </DropZone>
 
       <Accordion title="Основное" icon="cube-outline" defaultOpen>
         <Field label="Название *" value={form.name} onChangeText={(v) => set("name", v)} />
@@ -726,46 +795,53 @@ function BadgeCount({ children }: { children: React.ReactNode }) {
 
 const styles = StyleSheet.create({
   photosCard: { marginBottom: spacing.md },
-  imageRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  imgCell: { width: 64 },
-  image: { width: 64, height: 64, borderRadius: radius.sm, backgroundColor: colors.surfaceAlt },
-  imgMoveRow: {
+  photosCardInner: { marginBottom: 0 },
+  imgRow: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 2,
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: spacing.sm,
   },
+  image: { width: 56, height: 56, borderRadius: radius.sm, backgroundColor: colors.surface },
+  imgMeta: { flex: 1, minWidth: 0 },
+  imgName: { color: colors.text, fontSize: 14, fontWeight: "600" },
+  imgMain: { color: colors.accent, fontSize: 11, marginTop: 1, fontWeight: "600" },
+  imgArrowCol: { gap: 2 },
   imgMoveBtn: {
-    width: 20,
+    width: 22,
     height: 20,
     borderRadius: 6,
-    backgroundColor: colors.surfaceAlt,
+    backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",
   },
   imgMoveDisabled: { opacity: 0.4 },
-  imgIndex: { color: colors.textMuted, fontSize: 10, fontWeight: "600" },
   removeImg: {
-    position: "absolute",
-    top: -6,
-    right: -6,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.danger,
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    backgroundColor: "#2a1114",
     alignItems: "center",
     justifyContent: "center",
   },
   addImage: {
-    width: 64,
-    height: 64,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    paddingVertical: spacing.md,
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
     borderStyle: "dashed",
-    alignItems: "center",
-    justifyContent: "center",
   },
+  addImageText: { color: colors.accent, fontSize: 14, fontWeight: "600" },
   hint: { color: colors.textMuted, fontSize: 12, marginTop: spacing.sm, lineHeight: 17 },
   row2: { flexDirection: "row", gap: spacing.md },
   col: { flex: 1 },

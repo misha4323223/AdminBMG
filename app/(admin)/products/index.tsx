@@ -13,6 +13,7 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, EmptyState, InlineError, LoadingView, SearchBar } from "@/components/ui";
+import { ListSkeleton } from "@/components/Skeletons";
 import { SelectField } from "@/components/SelectField";
 import { apiDelete, apiGet, apiPatch, apiPost, getErrorMessage, uploadImage } from "@/lib/api";
 import {
@@ -621,7 +622,7 @@ export default function ProductsScreen() {
   if (loading) {
     return (
       <Screen title="Товары" scroll={false}>
-        <LoadingView />
+        <ListSkeleton rows={7} />
       </Screen>
     );
   }

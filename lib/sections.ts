@@ -26,5 +26,6 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   { key: "ai-questions", title: "AI-вопросы", description: "Библиотека вопросов", icon: "help-circle-outline", route: "/ai-questions" },
   { key: "seo", title: "SEO", description: "Настройки страниц, аудит", icon: "search-outline", route: "/seo" },
   { key: "security", title: "Безопасность", description: "Меры защиты и лимиты", icon: "shield-checkmark-outline", route: "/security" },
+  { key: "diagnostics", title: "Диагностика", description: "Статус сервера и API, журнал событий", icon: "pulse-outline", route: "/diagnostics" },
   { key: "integrations", title: "Интеграции", description: "1С, Ozon, push, примерка", icon: "extension-puzzle-outline", route: "/integrations" },
 ];

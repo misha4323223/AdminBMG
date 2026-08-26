@@ -12,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { colors, font, radius, spacing } from "@/constants/theme";
+import { hapticLight } from "@/lib/haptics";
 
 export function Card({
   children,
@@ -181,7 +182,10 @@ export function Button({
   );
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => {
+        hapticLight();
+        onPress();
+      }}
       disabled={disabled || loading}
       style={({ pressed }) => [
         styles.button,
