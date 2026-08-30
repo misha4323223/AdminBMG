@@ -286,6 +286,15 @@ export default function ProductDetailScreen() {
     ? subSubsFor(mergedCategories, form.category, form.subcategory)
     : [];
 
+  // ПК: Ctrl+S — сохранить товар.
+  // ВАЖНО: все useEffect должны идти ДО условного return (if loading), иначе
+  // при смене loading false→true React увидит «меньше хуков, чем в прошлый рендер».
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    return registerHotkey("product-save", { key: "s", ctrl: true }, () => void save(), 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (loading) {
     return (
       <Screen title="Товар" scroll={false}>
@@ -383,13 +392,6 @@ export default function ProductDetailScreen() {
       setSaving(false);
     }
   };
-
-  // ПК: Ctrl+S — сохранить товар.
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    return registerHotkey("product-save", { key: "s", ctrl: true }, () => void save(), 50);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const remove = async () => {
     if (!confirmDelete) {

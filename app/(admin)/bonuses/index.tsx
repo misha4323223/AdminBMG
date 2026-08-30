@@ -190,9 +190,15 @@ function PromoTab() {
     startsAt: "",
     expiresAt: "",
     allowForWholesale: false,
+    appOnly: false,
     applicableCategories: [] as string[],
   });
   const [busy, setBusy] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState({ startsAt: "", expiresAt: "" });
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -204,6 +210,67 @@ function PromoTab() {
       setError(getErrorMessage(e));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const isExpired = (p: any) => !!p.expiresAt && new Date(p.expiresAt).getTime() < Date.now();
+
+  const startEdit = (p: any) => {
+    setEditingId(p.id);
+    setEditForm({
+      startsAt: p.startsAt ? String(p.startsAt).slice(0, 10) : "",
+      expiresAt: p.expiresAt ? String(p.expiresAt).slice(0, 10) : "",
+    });
+  };
+
+  const saveEdit = async () => {
+    if (editingId == null) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiPatch(`/promo-codes/${editingId}`, {
+        startsAt: editForm.startsAt ? new Date(editForm.startsAt).toISOString() : null,
+        expiresAt: editForm.expiresAt ? new Date(editForm.expiresAt).toISOString() : null,
+      });
+      setEditingId(null);
+      load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => setSelected(new Set(promoCodes.map((p) => p.id)));
+  const selectExpired = () => setSelected(new Set(promoCodes.filter(isExpired).map((p) => p.id)));
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
+  const batchDelete = async () => {
+    if (selected.size === 0) return;
+    setBatchBusy(true);
+    setError("");
+    try {
+      await apiPost("/promo-codes/batch-delete", { ids: [...selected] });
+      setSelected(new Set());
+      setSelectMode(false);
+      load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBatchBusy(false);
     }
   };
 
@@ -238,6 +305,7 @@ function PromoTab() {
         expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
         isActive: true,
         allowForWholesale: form.allowForWholesale,
+        appOnly: form.appOnly,
         applicableCategories:
           form.applicableCategories.length > 0 ? JSON.stringify(form.applicableCategories) : null,
       });
@@ -250,6 +318,7 @@ function PromoTab() {
         startsAt: "",
         expiresAt: "",
         allowForWholesale: false,
+        appOnly: false,
         applicableCategories: [],
       });
       load();
@@ -305,6 +374,7 @@ function PromoTab() {
       style={styles.flex}
       contentContainerStyle={styles.list}
       ListHeaderComponent={
+        <>
         <Card style={styles.formCard}>
           <SectionTitle>Создать новый промокод</SectionTitle>
           <InlineError text={error} />
@@ -361,6 +431,15 @@ function PromoTab() {
             <Text style={styles.wholesaleLabel}>Доступен для оптовых покупателей</Text>
           </Pressable>
 
+          <Pressable onPress={() => setForm((f) => ({ ...f, appOnly: !f.appOnly }))} style={styles.wholesaleRow}>
+            <Ionicons
+              name={form.appOnly ? "checkbox" : "square-outline"}
+              size={20}
+              color={form.appOnly ? colors.accent : colors.textMuted}
+            />
+            <Text style={styles.wholesaleLabel}>Только в мобильном приложении</Text>
+          </Pressable>
+
           <Text style={styles.fieldLabel}>Применять только к категориям (пусто = на весь заказ)</Text>
           <Pressable onPress={() => setCatsOpen((v) => !v)} style={styles.catsTrigger}>
             {form.applicableCategories.length === 0 ? (
@@ -415,32 +494,101 @@ function PromoTab() {
 
           <Button title="Создать" onPress={create} loading={busy} icon="add" />
         </Card>
+        <Card style={styles.formCard}>
+          <View style={styles.createRow}>
+            {!selectMode ? (
+              <Button
+                title="Выбрать несколько"
+                variant="secondary"
+                icon="checkbox-outline"
+                onPress={() => setSelectMode(true)}
+              />
+            ) : (
+              <>
+                <Button title="Отмена" variant="ghost" onPress={exitSelectMode} />
+                <Button title="Все" variant="ghost" onPress={selectAll} />
+                <Button title="Просроченные" variant="ghost" onPress={selectExpired} />
+                <Button
+                  title={`Удалить (${selected.size})`}
+                  variant="danger"
+                  onPress={batchDelete}
+                  loading={batchBusy}
+                  disabled={selected.size === 0}
+                />
+              </>
+            )}
+          </View>
+        </Card>
+        </>
       }
       renderItem={({ item }) => {
         const only = categoryRestrictionLabel(item);
+        const expired = isExpired(item);
+        const checked = selected.has(item.id);
+        const editing = editingId === item.id;
         return (
           <View style={styles.row}>
+            {selectMode ? (
+              <Pressable onPress={() => toggleSelect(item.id)} hitSlop={8} style={{ marginRight: spacing.sm }}>
+                <Ionicons
+                  name={checked ? "checkbox" : "square-outline"}
+                  size={22}
+                  color={checked ? colors.accent : colors.textMuted}
+                />
+              </Pressable>
+            ) : null}
             <View style={{ flex: 1 }}>
-              <View style={styles.codeRow}>
-                <Text style={styles.code}>{item.code}</Text>
-                {item.allowForWholesale ? <Badge tone="info">Опт</Badge> : null}
-              </View>
-              <Text style={styles.sub}>
-                {discountLabel(item)} скидка
-                {item.minOrderAmount > 0 ? ` · от ${formatRub(item.minOrderAmount)}` : ""}
-                {item.maxUses > 0 ? ` · использовано: ${item.usedCount ?? 0}/${item.maxUses}` : ""}
-                {only ? ` · только: ${only}` : ""}
-              </Text>
-              {item.expiresAt ? <Text style={styles.sub}>до {formatDate(item.expiresAt)}</Text> : null}
+              {editing ? (
+                <>
+                  <Field
+                    label="Начало (гггг-мм-дд)"
+                    value={editForm.startsAt}
+                    onChangeText={(v) => setEditForm((f) => ({ ...f, startsAt: v }))}
+                  />
+                  <Field
+                    label="Конец (гггг-мм-дд)"
+                    value={editForm.expiresAt}
+                    onChangeText={(v) => setEditForm((f) => ({ ...f, expiresAt: v }))}
+                  />
+                  <View style={styles.createRow}>
+                    <Button title="Сохранить" onPress={saveEdit} loading={busy} icon="checkmark" />
+                    <Button title="Отмена" variant="ghost" onPress={() => setEditingId(null)} />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.codeRow}>
+                    <Text style={styles.code}>{item.code}</Text>
+                    {item.allowForWholesale ? <Badge tone="info">Опт</Badge> : null}
+                    {item.appOnly ? <Badge tone="success">Приложение</Badge> : null}
+                    {expired ? <Badge tone="danger">просрочен</Badge> : null}
+                  </View>
+                  <Text style={styles.sub}>
+                    {discountLabel(item)} скидка
+                    {item.minOrderAmount > 0 ? ` · от ${formatRub(item.minOrderAmount)}` : ""}
+                    {item.maxUses > 0 ? ` · использовано: ${item.usedCount ?? 0}/${item.maxUses}` : ""}
+                    {only ? ` · только: ${only}` : ""}
+                  </Text>
+                  {item.startsAt ? <Text style={styles.sub}>с {formatDate(item.startsAt)}</Text> : null}
+                  {item.expiresAt ? <Text style={styles.sub}>до {formatDate(item.expiresAt)}</Text> : null}
+                </>
+              )}
             </View>
-            <Pressable onPress={() => toggle(item)}>
-              <Badge tone={item.isActive ? "success" : "neutral"}>
-                {item.isActive ? "активен" : "выключен"}
-              </Badge>
-            </Pressable>
-            <Pressable onPress={() => remove(item.id)} hitSlop={8}>
-              <Text style={styles.delete}>Удалить</Text>
-            </Pressable>
+            {selectMode ? null : (
+              <>
+                <Pressable onPress={() => toggle(item)}>
+                  <Badge tone={item.isActive ? "success" : "neutral"}>
+                    {item.isActive ? "активен" : "выключен"}
+                  </Badge>
+                </Pressable>
+                <Pressable onPress={() => (editing ? setEditingId(null) : startEdit(item))} hitSlop={8}>
+                  <Text style={styles.edit}>{editing ? "Отмена" : "Изменить"}</Text>
+                </Pressable>
+                <Pressable onPress={() => remove(item.id)} hitSlop={8}>
+                  <Text style={styles.delete}>Удалить</Text>
+                </Pressable>
+              </>
+            )}
           </View>
         );
       }}
@@ -1491,6 +1639,8 @@ const styles = StyleSheet.create({
   codeRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   sub: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   delete: { color: colors.danger, fontSize: 13 },
+  edit: { color: colors.accent, fontSize: 13 },
+  editWrap: { marginRight: spacing.sm },
   fieldWrap: { flex: 1 },
   fieldLabel: { color: colors.textMuted, fontSize: 12, marginBottom: spacing.xs },
   wholesaleRow: {

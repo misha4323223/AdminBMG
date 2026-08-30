@@ -1,0 +1,12 @@
+# Аналогично .gitignore — плюс явно исключаем тяжёлые десктоп/сборочные артефакты.
+node_modules/
+.expo/
+dist/
+web-build/
+desktop/
+release/
+*.log
+.DS_Store
+.env
+.env.local
+expo-env.d.ts

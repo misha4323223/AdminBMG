@@ -1,6 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Animated,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -28,7 +27,7 @@ type Field = "email" | "password" | "apiKey" | null;
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, user, isLoading, hasBiometricCredentials } = useAuth();
+  const { login, user, isLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -37,23 +36,35 @@ export default function LoginScreen() {
   const [focused, setFocused] = useState<Field>(null);
   const [showSplash, setShowSplash] = useState(true);
   const [bioBusy, setBioBusy] = useState(false);
+  // Есть ли на устройстве отпечаток/FaceID (железо + хотя бы один отпечаток).
+  const [bioReady, setBioReady] = useState(false);
 
-  // Доступна ли биометрия: нативная платформа + сохранённые данные.
-  const bioAvailable =
-    !isLoading && biometricsSupported() && hasBiometricCredentials && !user;
-
-  // Плавное появление формы после заставки
-  const formOpacity = useRef(new Animated.Value(0)).current;
-  const formTranslate = useRef(new Animated.Value(24)).current;
+  // ВАЖНО для Android: никакого состояния клавиатуры и никаких изменений
+  // layout при фокусе. Иначе при открытии клавиатуры (adjustResize) форма
+  // «прыгает» между перерисовками. Форма статична по своей природе.
 
   useEffect(() => {
-    if (!showSplash) {
-      Animated.parallel([
-        Animated.timing(formOpacity, { toValue: 1, duration: 450, useNativeDriver: true }),
-        Animated.timing(formTranslate, { toValue: 0, duration: 450, useNativeDriver: true }),
-      ]).start();
-    }
-  }, [showSplash, formOpacity, formTranslate]);
+    if (!biometricsSupported()) return;
+    let alive = true;
+    (async () => {
+      try {
+        const [hw, enrolled] = await Promise.all([
+          LocalAuthentication.hasHardwareAsync(),
+          LocalAuthentication.isEnrolledAsync(),
+        ]);
+        if (alive) setBioReady(hw && enrolled);
+      } catch {
+        // нет биометрии или ошибка платформы — кнопка просто не появится
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Кнопка видна, если на устройстве настроен отпечаток/FaceID.
+  // Без сохранённых данных тап подскажет, как включить вход по биометрии.
+  const bioAvailable = !isLoading && bioReady && !user;
 
   useEffect(() => {
     if (!isLoading && user) {
@@ -81,7 +92,7 @@ export default function LoginScreen() {
       if (!result.success) return; // пользователь отменил — молча
       const creds = await getBioCredentials();
       if (!creds) {
-        setError("Сохранённые данные не найдены — войдите вручную");
+        setError("Войдите один раз вручную — доступ по отпечатку включится автоматически");
         return;
       }
       await login(creds.email, creds.password, creds.apiKey);
@@ -112,9 +123,11 @@ export default function LoginScreen() {
     }
   };
 
-  const inputStyle = (name: Exclude<Field, null>) => [
+  // При фокусе меняем ТОЛЬКО цвет рамки/иконки — без elevation, теней
+  // и изменения размеров, чтобы Android не перерисовывал слой поля.
+  const inputWrapStyle = (name: Exclude<Field, null>) => [
     styles.inputWrap,
-    focused === name && styles.inputWrapFocused,
+    focused === name && { borderColor: colors.accent },
   ];
 
   return (
@@ -122,30 +135,27 @@ export default function LoginScreen() {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
+        enabled={Platform.OS === "ios"}
       >
         <ScrollView
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         >
-          <Animated.View style={[styles.header, { opacity: formOpacity }]}>
+          <View style={styles.header}>
             <Image source={LOGO} style={styles.logo} resizeMode="contain" />
             <View style={styles.captionRow}>
               <View style={styles.captionLine} />
               <Text style={styles.caption}>АДМИН-ПАНЕЛЬ</Text>
               <View style={styles.captionLine} />
             </View>
-          </Animated.View>
+          </View>
 
-          <Animated.View
-            style={[
-              styles.form,
-              { opacity: formOpacity, transform: [{ translateY: formTranslate }] },
-            ]}
-          >
+          <View style={styles.form}>
             <InlineError text={error} />
 
             <Text style={styles.label}>Email администратора</Text>
-            <View style={inputStyle("email")}>
+            <View style={inputWrapStyle("email")}>
               <Ionicons
                 name="mail-outline"
                 size={16}
@@ -166,7 +176,7 @@ export default function LoginScreen() {
             </View>
 
             <Text style={styles.label}>Пароль</Text>
-            <View style={inputStyle("password")}>
+            <View style={inputWrapStyle("password")}>
               <Ionicons
                 name="lock-closed-outline"
                 size={16}
@@ -185,7 +195,7 @@ export default function LoginScreen() {
             </View>
 
             <Text style={styles.label}>API-ключ админки</Text>
-            <View style={inputStyle("apiKey")}>
+            <View style={inputWrapStyle("apiKey")}>
               <Ionicons
                 name="key-outline"
                 size={16}
@@ -213,33 +223,38 @@ export default function LoginScreen() {
               />
             </View>
 
-            {bioAvailable ? (
-              <Pressable
-                onPress={loginWithBiometrics}
-                disabled={bioBusy || busy}
-                style={({ pressed }) => [
-                  styles.bioButton,
-                  (pressed || bioBusy) && { opacity: 0.75 },
-                ]}
-              >
-                <Ionicons
-                  name="finger-print-outline"
-                  size={18}
-                  color={colors.accent}
-                />
-                <Text style={styles.bioText}>Войти по отпечатку</Text>
-              </Pressable>
-            ) : null}
-          </Animated.View>
+            {/* Кнопка отпечатка всегда занимает место (opacity 0), чтобы
+                форма не сдвигалась, когда биометрия «догружается». */}
+            <Pressable
+              onPress={loginWithBiometrics}
+              disabled={!bioAvailable || bioBusy || busy}
+              style={({ pressed }) => [
+                styles.bioButton,
+                !bioAvailable && styles.bioButtonHidden,
+                (pressed || bioBusy) && bioAvailable && { opacity: 0.75 },
+              ]}
+            >
+              <Ionicons
+                name="finger-print-outline"
+                size={18}
+                color={bioAvailable ? colors.accent : colors.textMuted}
+              />
+              <Text style={[styles.bioText, !bioAvailable && styles.bioTextHidden]}>
+                Войти по отпечатку
+              </Text>
+            </Pressable>
+          </View>
 
-          <Animated.Text style={[styles.hint, { opacity: formOpacity }]}>
+          <Text style={styles.hint}>
             Вход выполняется через ту же учётную запись администратора и
             API-ключ, что и на сайте booomerangs.ru/admin.
-          </Animated.Text>
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {showSplash || isLoading ? <Splash onDone={() => setShowSplash(false)} /> : null}
+      {/* Заставку монтируем только до её завершения — после неё форма должна
+          быть полностью доступна, даже если isLoading ещё проверяет сессию. */}
+      {showSplash ? <Splash onDone={() => setShowSplash(false)} /> : null}
     </SafeAreaView>
   );
 }
@@ -249,10 +264,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  // Один неизменный контейнер: при открытии клавиатуры Android сжимает окно
+  // (adjustResize), ScrollView сам прокрутит к активному полю — ничего
+  // не «перецентрируется» и не прыгает.
   container: {
     flexGrow: 1,
-    justifyContent: "center",
+    justifyContent: "flex-start",
     padding: spacing.xl,
+    paddingTop: spacing.xxl,
   },
   header: {
     alignItems: "center",
@@ -298,14 +317,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
   },
-  inputWrapFocused: {
-    borderColor: colors.accent,
-    shadowColor: colors.glowAccent,
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 4,
-  },
   input: {
     flex: 1,
     color: colors.text,
@@ -327,10 +338,17 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surfaceAlt,
   },
+  bioButtonHidden: {
+    opacity: 0,
+    pointerEvents: "none",
+  },
   bioText: {
     color: colors.accent,
     fontSize: 14,
     fontWeight: "700",
+  },
+  bioTextHidden: {
+    color: colors.textMuted,
   },
   hint: {
     color: colors.textMuted,

@@ -1,10 +1,11 @@
 // Полноэкранная заставка с логотипом BOOOMERANGS перед страницей входа.
-// Логотип «влетает» с пружиной, по нему периодически бьёт электрический
-// разряд (вспышка + дрожь), затем заставка плавно растворяется.
+// Логотип «влетает» с пружиной, по нему бьют РОВНО ТРИ удара молнии
+// (вспышка + дрожь + вибрация), затем заставка плавно растворяется.
 import React, { useEffect, useRef, useState } from "react";
 import { Animated, Dimensions, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { G, Polyline } from "react-native-svg";
+import { hapticMedium } from "@/lib/haptics";
 import { colors, font, spacing } from "@/constants/theme";
 
 const LOGO = require("@/assets/logo-light.png");
@@ -15,18 +16,17 @@ const LOGO_W = 220;
 const LOGO_H = 91;
 
 /** Случайная ломаная молния от верха экрана до центра логотипа. */
-function makeBolt(cx: number, cy: number, w: number, h: number) {
+function makeBolt(cx: number, cy: number) {
   const rand = (a: number, b: number) => a + Math.random() * (b - a);
   const main: string[] = [];
   const steps = 9;
-  let x = cx + rand(-w * 0.25, w * 0.25);
+  let x = cx + rand(-26, 26);
   let y = -20;
   main.push(`${x.toFixed(1)},${y.toFixed(1)}`);
   const branchStartIdx = 3 + Math.floor(Math.random() * 3);
   let branch: string[] = [];
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    // к концу сходится точно в центр логотипа
     const tx = i === steps ? cx : cx + (x - cx) * (1 - t) * 0.2 + rand(-22, 22);
     const ty = -20 + (cy + 20) * t + rand(-8, 8);
     x = tx;
@@ -44,7 +44,6 @@ function makeBolt(cx: number, cy: number, w: number, h: number) {
       }
     }
   }
-  void w; void h;
   return { main: main.join(" "), branch: branch.join(" ") };
 }
 
@@ -52,10 +51,11 @@ export function Splash({ onDone }: { onDone: () => void }) {
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const logoScale = useRef(new Animated.Value(0.55)).current;
   const textOpacity = useRef(new Animated.Value(0)).current;
-  const dot1 = useRef(new Animated.Value(0.25)).current;
-  const dot2 = useRef(new Animated.Value(0.25)).current;
-  const dot3 = useRef(new Animated.Value(0.25)).current;
   const screenOpacity = useRef(new Animated.Value(1)).current;
+
+  // Заставка завершилась: больше не перехватываем нажатия (страховка,
+  // если компонент ещё смонтирован, пока идёт проверка сессии).
+  const [finished, setFinished] = useState(false);
 
   // Электрический разряд
   const [bolt, setBolt] = useState({ main: "", branch: "" });
@@ -64,73 +64,83 @@ export function Splash({ onDone }: { onDone: () => void }) {
   const shakeX = useRef(new Animated.Value(0)).current;
   const { width: winW, height: winH } = Dimensions.get("window");
   const logoCx = winW / 2;
-  const logoCy = winH / 2 - 40; // центр логотипа с учётом подписи снизу
+  const logoCy = winH / 2 - 40;
 
   useEffect(() => {
     let alive = true;
-    let timer: ReturnType<typeof setTimeout>;
 
-    const strike = () => {
+    /** Один удар молнии: молния, вспышка, дрожь, вибрация. */
+    const strike = (delay: number) =>
+      new Promise<void>((resolve) => {
+        if (!alive) return resolve();
+        setBolt(makeBolt(logoCx, logoCy));
+        Animated.parallel([
+          // мерцание самой молнии
+          Animated.sequence([
+            Animated.timing(boltOpacity, { toValue: 1, duration: 40, useNativeDriver: true }),
+            Animated.timing(boltOpacity, { toValue: 0.15, duration: 60, useNativeDriver: true }),
+            Animated.timing(boltOpacity, { toValue: 0.9, duration: 40, useNativeDriver: true }),
+            Animated.timing(boltOpacity, { toValue: 0, duration: 220, useNativeDriver: true }),
+          ]),
+          // логотип вспыхивает белым
+          Animated.sequence([
+            Animated.timing(flashOpacity, { toValue: 0.95, duration: 50, useNativeDriver: true }),
+            Animated.timing(flashOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+          ]),
+          // лёгкая дрожь
+          Animated.sequence([
+            Animated.timing(shakeX, { toValue: 3, duration: 45, useNativeDriver: true }),
+            Animated.timing(shakeX, { toValue: -3, duration: 45, useNativeDriver: true }),
+            Animated.timing(shakeX, { toValue: 1.8, duration: 45, useNativeDriver: true }),
+            Animated.timing(shakeX, { toValue: 0, duration: 70, useNativeDriver: true }),
+          ]),
+        ]).start(({ finished: ok }) => {
+          if (ok && alive) resolve();
+          else resolve();
+        });
+      });
+
+    const run = async () => {
       if (!alive) return;
-      setBolt(makeBolt(logoCx, logoCy, winW, winH));
-      Animated.parallel([
-        // мерцание самой молнии
-        Animated.sequence([
-          Animated.timing(boltOpacity, { toValue: 1, duration: 40, useNativeDriver: true }),
-          Animated.timing(boltOpacity, { toValue: 0.15, duration: 60, useNativeDriver: true }),
-          Animated.timing(boltOpacity, { toValue: 0.9, duration: 40, useNativeDriver: true }),
-          Animated.timing(boltOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
-        ]),
-        // логотип вспыхивает белым
-        Animated.sequence([
-          Animated.timing(flashOpacity, { toValue: 0.95, duration: 50, useNativeDriver: true }),
-          Animated.timing(flashOpacity, { toValue: 0, duration: 260, useNativeDriver: true }),
-        ]),
-        // лёгкая дрожь
-        Animated.sequence([
-          Animated.timing(shakeX, { toValue: 2.5, duration: 45, useNativeDriver: true }),
-          Animated.timing(shakeX, { toValue: -2.5, duration: 45, useNativeDriver: true }),
-          Animated.timing(shakeX, { toValue: 1.5, duration: 45, useNativeDriver: true }),
-          Animated.timing(shakeX, { toValue: 0, duration: 60, useNativeDriver: true }),
-        ]),
-      ]).start();
-      timer = setTimeout(strike, 700 + Math.random() * 900);
-    };
-
-    const pulse = (v: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(v, { toValue: 1, duration: 350, useNativeDriver: true }),
-          Animated.timing(v, { toValue: 0.25, duration: 350, useNativeDriver: true }),
-        ]),
-      );
-    Animated.sequence([
+      // появление логотипа и подписи
       Animated.parallel([
         Animated.timing(logoOpacity, { toValue: 1, duration: 550, useNativeDriver: true }),
         Animated.spring(logoScale, { toValue: 1, friction: 6, useNativeDriver: true }),
-      ]),
-      Animated.timing(textOpacity, { toValue: 1, duration: 400, delay: 120, useNativeDriver: true }),
-      Animated.delay(1250),
-      Animated.timing(screenOpacity, { toValue: 0, duration: 450, useNativeDriver: true }),
-    ]).start(({ finished }) => {
-      alive = false;
-      clearTimeout(timer);
-      if (finished) onDone();
-    });
-    pulse(dot1, 0).start();
-    pulse(dot2, 160).start();
-    pulse(dot3, 320).start();
-    timer = setTimeout(strike, 600);
+      ]).start();
+      Animated.timing(textOpacity, { toValue: 1, duration: 400, delay: 150, useNativeDriver: true }).start();
+
+      // Три удара молнии с вибрацией на каждый
+      const strikes = [450, 1300, 2150];
+      for (const delay of strikes) {
+        await new Promise<void>((r) => setTimeout(r, delay));
+        if (!alive) return;
+        hapticMedium();
+        await strike(0);
+        if (!alive) return;
+      }
+
+      // пауза и плавный уход
+      await new Promise<void>((r) => setTimeout(r, 700));
+      if (!alive) return;
+      Animated.timing(screenOpacity, { toValue: 0, duration: 450, useNativeDriver: true }).start(({ finished: ok }) => {
+        if (!alive) return;
+        setFinished(true);
+        if (ok) onDone();
+      });
+    };
+
+    run();
     return () => {
       alive = false;
-      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <Animated.View style={[styles.screen, { opacity: screenOpacity }]} pointerEvents="auto">
+    <Animated.View
+      style={[styles.screen, { opacity: screenOpacity }]}
+      pointerEvents={finished ? "none" : "auto"}
+    >
       <LinearGradient
         colors={[...colors.gradCosmic]}
         start={{ x: 0, y: 0 }}
@@ -172,11 +182,11 @@ export function Splash({ onDone }: { onDone: () => void }) {
           <Text style={styles.title}>Админ-панель</Text>
           <Text style={styles.subtitle}>Управление магазином BOOOMERANGS</Text>
         </Animated.View>
-        <Animated.View style={[styles.dots, { opacity: textOpacity }]}>
-          <Animated.View style={[styles.dot, { opacity: dot1 }]} />
-          <Animated.View style={[styles.dot, { opacity: dot2 }]} />
-          <Animated.View style={[styles.dot, { opacity: dot3 }]} />
-        </Animated.View>
+        <View style={styles.dots}>
+          <View style={styles.dot} />
+          <View style={styles.dot} />
+          <View style={styles.dot} />
+        </View>
       </View>
       <Animated.Text style={[styles.footer, { opacity: textOpacity }]}>
         booomerangs.ru
@@ -184,8 +194,6 @@ export function Splash({ onDone }: { onDone: () => void }) {
     </Animated.View>
   );
 }
-
-/** Анимированная группа SVG-элементов (для мерцания молнии). */
 
 const styles = StyleSheet.create({
   screen: {

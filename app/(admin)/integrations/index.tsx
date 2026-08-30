@@ -31,6 +31,8 @@ interface PushHistoryEntry {
 export default function IntegrationsScreen() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [tryon, setTryon] = useState<boolean | null>(null);
+  const [aiChat, setAiChat] = useState<boolean | null>(null);
+  const [boomAi, setBoomAi] = useState<boolean | null>(null);
   const [ozon, setOzon] = useState<Record<string, unknown> | null>(null);
   const [pushTotal, setPushTotal] = useState<number | null>(null);
   const [adminPush, setAdminPush] = useState<Record<string, unknown> | null>(null);
@@ -47,16 +49,21 @@ export default function IntegrationsScreen() {
   const load = async () => {
     setError("");
     try {
-      const [sync, tryonData, ozonData, pushData, adminPushData, historyData] = await Promise.all([
-        apiGet<{ enabled: boolean }>("/admin/1c-sync-status"),
-        apiGet<{ enabled: boolean }>("/admin/virtual-tryon/settings").catch(() => null),
-        apiGet<Record<string, unknown>>("/admin/ozon-delivery/settings").catch(() => null),
-        apiGet<{ total: number }>("/admin/push/stats").catch(() => null),
-        apiGet<Record<string, unknown>>("/admin/push/admin-stats").catch(() => null),
-        apiGet<PushHistoryEntry[]>("/admin/push/history").catch(() => []),
-      ]);
+      const [sync, tryonData, aiChatData, boomAiData, ozonData, pushData, adminPushData, historyData] =
+        await Promise.all([
+          apiGet<{ enabled: boolean }>("/admin/1c-sync-status"),
+          apiGet<{ enabled: boolean }>("/admin/virtual-tryon/settings").catch(() => null),
+          apiGet<{ enabled: boolean }>("/admin/ai-chat/settings").catch(() => null),
+          apiGet<{ enabled: boolean }>("/admin/booom-ai/settings").catch(() => null),
+          apiGet<Record<string, unknown>>("/admin/ozon-delivery/settings").catch(() => null),
+          apiGet<{ total: number }>("/admin/push/stats").catch(() => null),
+          apiGet<Record<string, unknown>>("/admin/push/admin-stats").catch(() => null),
+          apiGet<PushHistoryEntry[]>("/admin/push/history").catch(() => []),
+        ]);
       setEnabled(sync.enabled);
       setTryon(tryonData?.enabled ?? null);
+      setAiChat(aiChatData?.enabled ?? null);
+      setBoomAi(boomAiData?.enabled ?? null);
       setOzon(ozonData);
       setPushTotal(pushData?.total ?? null);
       setAdminPush(adminPushData);
@@ -89,6 +96,34 @@ export default function IntegrationsScreen() {
     try {
       const res = await apiPost<{ enabled: boolean }>("/admin/virtual-tryon/settings", { enabled: !tryon });
       setTryon(res.enabled);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleAiChat = async () => {
+    if (aiChat == null) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await apiPost<{ enabled: boolean }>("/admin/ai-chat/settings", { enabled: !aiChat });
+      setAiChat(res.enabled);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleBoomAi = async () => {
+    if (boomAi == null) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await apiPost<{ enabled: boolean }>("/admin/booom-ai/settings", { enabled: !boomAi });
+      setBoomAi(res.enabled);
     } catch (e) {
       setError(getErrorMessage(e));
     } finally {
@@ -257,6 +292,46 @@ export default function IntegrationsScreen() {
             style={[styles.toggle, tryon && styles.toggleOn]}
           >
             <View style={[styles.dot, tryon && styles.dotOn]} />
+          </Pressable>
+        </View>
+      </Card>
+
+      <Card style={styles.card}>
+        <SectionTitle>AI-чат (облачный ассистент)</SectionTitle>
+        <View style={styles.rowBetween}>
+          <Text style={styles.desc}>
+            {aiChat == null
+              ? "Проверка…"
+              : aiChat
+                ? "Облачный AI-ассистент виден в чате на сайте"
+                : "Облачный AI-ассистент скрыт"}
+          </Text>
+          <Pressable
+            onPress={toggleAiChat}
+            disabled={busy || aiChat == null}
+            style={[styles.toggle, aiChat && styles.toggleOn]}
+          >
+            <View style={[styles.dot, aiChat && styles.dotOn]} />
+          </Pressable>
+        </View>
+      </Card>
+
+      <Card style={styles.card}>
+        <SectionTitle>BOOM AI (локальная модель)</SectionTitle>
+        <View style={styles.rowBetween}>
+          <Text style={styles.desc}>
+            {boomAi == null
+              ? "Проверка…"
+              : boomAi
+                ? "Локальный BOOM AI виден в чате на сайте"
+                : "Локальный BOOM AI скрыт"}
+          </Text>
+          <Pressable
+            onPress={toggleBoomAi}
+            disabled={busy || boomAi == null}
+            style={[styles.toggle, boomAi && styles.toggleOn]}
+          >
+            <View style={[styles.dot, boomAi && styles.dotOn]} />
           </Pressable>
         </View>
       </Card>

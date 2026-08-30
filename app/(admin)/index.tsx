@@ -1,5 +1,16 @@
-import React, { useEffect, useState } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Animated,
+  Image,
+  PanResponder,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -8,7 +19,7 @@ import { AgentChat } from "@/components/AgentChat";
 import { StatCard } from "@/components/ui";
 import { useAuth } from "@/context/AuthContext";
 import { apiGet } from "@/lib/api";
-import { getRecent, type RecentItem } from "@/lib/recent";
+import { getRecent, removeRecent, type RecentItem } from "@/lib/recent";
 import { isDesktop, minimizeToTray, notify, toggleAlwaysOnTop } from "@/lib/desktop";
 import { getStoredJson, setStoredJson } from "@/lib/storage";
 import { ADMIN_SECTIONS } from "@/lib/sections";
@@ -251,25 +262,23 @@ export default function Dashboard() {
 
       {recent.length > 0 ? (
         <View style={styles.recentBlock}>
-          <Text style={styles.gridTitle}>Недавние</Text>
+          <View style={styles.recentHeader}>
+            <Text style={styles.gridTitle}>Недавние</Text>
+            <Text style={styles.recentHint}>свайп влево/вправо — убрать</Text>
+          </View>
           <View style={styles.recentRow}>
             {recent.map((r) => (
-              <Pressable
+              <RecentChip
                 key={`${r.type}-${r.id}`}
-                onPress={() =>
+                item={r}
+                onOpen={() =>
                   router.push((r.type === "order" ? `/orders/${r.id}` : `/products/${r.id}`) as never)
                 }
-                style={({ pressed }) => [styles.recentChip, pressed && { opacity: 0.75 }]}
-              >
-                <Ionicons
-                  name={r.type === "order" ? "receipt-outline" : "shirt-outline"}
-                  size={13}
-                  color={colors.accent}
-                />
-                <Text style={styles.recentText} numberOfLines={1}>
-                  {r.label}
-                </Text>
-              </Pressable>
+                onRemove={() => {
+                  setRecent((prev) => prev.filter((x) => !(x.type === r.type && x.id === r.id)));
+                  void removeRecent(r.type, r.id);
+                }}
+              />
             ))}
           </View>
         </View>
@@ -305,6 +314,74 @@ export default function Dashboard() {
         ))}
       </View>
     </Screen>
+  );
+}
+
+/* Свайп влево/вправо — убрать чип из «Недавних». */
+const SWIPE_THRESHOLD = 60;
+const SWIPE_FLING = 280;
+
+function RecentChip({
+  item,
+  onOpen,
+  onRemove,
+}: {
+  item: RecentItem;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const pan = useRef(
+    PanResponder.create({
+      // Забираем жест только при явном горизонтальном движении,
+      // чтобы вертикальная прокрутка страницы работала как обычно.
+      onMoveShouldSetPanResponder: (_evt, g) =>
+        Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.15,
+      onPanResponderMove: (_evt, g) =>
+        translateX.setValue(Math.max(-SWIPE_FLING, Math.min(SWIPE_FLING, g.dx))),
+      onPanResponderRelease: (_evt, g) => {
+        if (Math.abs(g.dx) > SWIPE_THRESHOLD || Math.abs(g.vx) > 0.7) {
+          const dir = g.dx >= 0 ? 1 : -1;
+          hapticLight();
+          Animated.timing(translateX, {
+            toValue: dir * SWIPE_FLING,
+            duration: 150,
+            useNativeDriver: Platform.OS !== "web",
+          }).start(() => onRemove());
+        } else {
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: Platform.OS !== "web",
+            bounciness: 6,
+          }).start();
+        }
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderTerminate: () =>
+        Animated.spring(translateX, {
+          toValue: 0,
+          useNativeDriver: Platform.OS !== "web",
+          bounciness: 6,
+        }).start(),
+    }),
+  ).current;
+
+  return (
+    <Animated.View {...pan.panHandlers} style={{ transform: [{ translateX }] }}>
+      <Pressable
+        onPress={onOpen}
+        style={({ pressed }) => [styles.recentChip, pressed && { opacity: 0.75 }]}
+      >
+        <Ionicons
+          name={item.type === "order" ? "receipt-outline" : "shirt-outline"}
+          size={13}
+          color={colors.accent}
+        />
+        <Text style={styles.recentText} numberOfLines={1}>
+          {item.label}
+        </Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -471,6 +548,15 @@ const styles = StyleSheet.create({
   },
   recentBlock: {
     marginBottom: spacing.xl,
+  },
+  recentHeader: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: spacing.sm,
+  },
+  recentHint: {
+    color: colors.textMuted,
+    fontSize: 11,
   },
   recentRow: {
     flexDirection: "row",

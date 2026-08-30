@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { Button, Card, EmptyState, Field, InlineError, LoadingView, SectionTitle } from "@/components/ui";
@@ -9,6 +9,26 @@ import { useFetch } from "@/lib/useFetch";
 import { getErrorMessage } from "@/lib/api";
 import { formatRub } from "@/lib/format";
 import { colors, spacing } from "@/constants/theme";
+import {
+  MetrikaPeriod,
+  MetrikaPeriodKey,
+  METRIKA_PERIODS,
+  getMetrikaPeriod,
+  loadMetrikaStatus,
+  loadMetrikaSummary,
+  loadMetrikaProducts,
+  loadMetrikaDaily,
+  loadMetrikaProductDates,
+  loadMetrikaPages,
+  loadMetrikaDevices,
+  loadMetrikaGeo,
+  loadMetrikaGoals,
+  summarizeMetrika,
+  MetrikaReport,
+  MetrikaRow,
+  MetrikaBlock,
+  MetrikaGoals as MetrikaGoalsType,
+} from "@/lib/metrika";
 
 interface OrderAnalyticsRow {
   month: string;
@@ -57,6 +77,52 @@ export default function AnalyticsScreen() {
   const orders = useFetch<OrderAnalyticsRow[]>("/admin/analytics/orders");
   const artists = useFetch<ArtistAnalyticsRow[]>("/admin/analytics/artists");
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  // --- Яндекс.Метрика: аналитика трафика + e-commerce (общий период).
+  const [metrikaPeriodKey, setMetrikaPeriodKey] = useState<MetrikaPeriodKey>("7d");
+  const [metrikaRefreshing, setMetrikaRefreshing] = useState(false);
+  const [metrikaStatus, setMetrikaStatus] = useState<MetrikaBlock<import("@/lib/metrika").MetrikaStatus> | null>(null);
+  const [metrikaSummary, setMetrikaSummary] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaProducts, setMetrikaProducts] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaDaily, setMetrikaDaily] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaProductDates, setMetrikaProductDates] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaPages, setMetrikaPages] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaDevices, setMetrikaDevices] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaGeo, setMetrikaGeo] = useState<MetrikaBlock<MetrikaReport> | null>(null);
+  const [metrikaGoals, setMetrikaGoals] = useState<MetrikaBlock<MetrikaGoalsType> | null>(null);
+
+  const refreshMetrika = async (periodKey: MetrikaPeriodKey = metrikaPeriodKey) => {
+    setMetrikaRefreshing(true);
+    try {
+      const period = getMetrikaPeriod(periodKey);
+      // Загружаем отчёты строго по одному (не параллельно): Яндекс.Метрика
+      // жёстко ограничивает число параллельных запросов на токен, и ожидание
+      // всех 9 отчётов разом упиралось в квоту («Превышена квота на количество
+      // параллельных запросов»). Последовательно грузим каждый блок и сразу
+      // показываем, как только он готов.
+      const steps: Array<() => void> = [
+        () => void loadMetrikaStatus().then(setMetrikaStatus),
+        () => void loadMetrikaSummary(period).then(setMetrikaSummary),
+        () => void loadMetrikaProducts(period).then(setMetrikaProducts),
+        () => void loadMetrikaDaily(period).then(setMetrikaDaily),
+        () => void loadMetrikaProductDates(period).then(setMetrikaProductDates),
+        () => void loadMetrikaPages(period).then(setMetrikaPages),
+        () => void loadMetrikaDevices(period).then(setMetrikaDevices),
+        () => void loadMetrikaGeo(period).then(setMetrikaGeo),
+        () => void loadMetrikaGoals(period).then(setMetrikaGoals),
+      ];
+      for (const step of steps) {
+        await step();
+      }
+    } finally {
+      setMetrikaRefreshing(false);
+    }
+  };
+
+  React.useEffect(() => {
+    refreshMetrika(metrikaPeriodKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metrikaPeriodKey]);
 
   const rows = orders.data || [];
   const totalRetail = rows.reduce((s, r) => s + r.retailCount, 0);
@@ -268,8 +334,328 @@ export default function AnalyticsScreen() {
           })
         )}
       </Card>
+
+      <MetrikaCard
+        refreshing={metrikaRefreshing}
+        periodKey={metrikaPeriodKey}
+        onPeriodChange={setMetrikaPeriodKey}
+        configured={metrikaStatus?.data?.configured}
+        counterId={metrikaStatus?.data?.counterId}
+        statusError={metrikaStatus?.detail}
+        summary={metrikaSummary}
+        products={metrikaProducts}
+        daily={metrikaDaily}
+        productDates={metrikaProductDates}
+        pages={metrikaPages}
+        devices={metrikaDevices}
+        geo={metrikaGeo}
+        goals={metrikaGoals}
+        onRefresh={() => refreshMetrika(metrikaPeriodKey)}
+      />
     </Screen>
   );
+}
+
+function MetrikaCard({
+  refreshing,
+  periodKey,
+  onPeriodChange,
+  configured,
+  counterId,
+  statusError,
+  summary,
+  products,
+  daily,
+  productDates,
+  pages,
+  devices,
+  geo,
+  goals,
+  onRefresh,
+}: {
+  refreshing: boolean;
+  periodKey: MetrikaPeriodKey;
+  onPeriodChange: (k: MetrikaPeriodKey) => void;
+  configured?: boolean;
+  counterId?: string;
+  statusError?: string;
+  summary: MetrikaBlock<MetrikaReport> | null;
+  products: MetrikaBlock<MetrikaReport> | null;
+  daily: MetrikaBlock<MetrikaReport> | null;
+  productDates: MetrikaBlock<MetrikaReport> | null;
+  pages: MetrikaBlock<MetrikaReport> | null;
+  devices: MetrikaBlock<MetrikaReport> | null;
+  geo: MetrikaBlock<MetrikaReport> | null;
+  goals: MetrikaBlock<MetrikaGoalsType> | null;
+  onRefresh: () => void;
+}) {
+  const ready = configured === true;
+  const totals = summarizeMetrika(summary?.data?.data);
+  const period = getMetrikaPeriod(periodKey);
+  const periodLabel = period.label.toLowerCase();
+
+  return (
+    <>
+      {/* Разделитель: своя секция карточки «Яндекс.Метрика» внутри Аналитики. */}
+      <View style={styles.metrikaDivider}>
+        <View style={styles.metrikaDividerLine} />
+        <Text style={styles.metrikaDividerLabel}>Внешняя аналитика</Text>
+        <View style={styles.metrikaDividerLine} />
+      </View>
+
+      <Card style={styles.card}>
+        <View style={styles.metrikaHeader}>
+          <View style={styles.metrikaTitleWrap}>
+            <View style={styles.metrikaIcon}>
+              <Ionicons name="bar-chart" size={18} color={colors.accent} />
+            </View>
+            <SectionTitle>Яндекс.Метрика</SectionTitle>
+          </View>
+          <View style={styles.metrikaHeaderRight}>
+            {refreshing ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+            <Button
+              title="Обновить"
+              variant="ghost"
+              icon="refresh-outline"
+              onPress={onRefresh}
+              loading={refreshing}
+            />
+          </View>
+        </View>
+
+        {/* Период */}
+        <View style={styles.metrikaPeriodRow}>
+          {METRIKA_PERIODS.map((p) => {
+            const active = p.key === periodKey;
+            return (
+              <Pressable
+                key={p.key}
+                onPress={() => onPeriodChange(p.key)}
+                style={[styles.metrikaPeriodChip, active && styles.metrikaPeriodChipActive]}
+              >
+                <Text style={[styles.metrikaPeriodChipText, active && styles.metrikaPeriodChipTextActive]}>
+                  {p.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {statusError ? <InlineError text={statusError} /> : null}
+
+        {!ready ? (
+          configured === false ? (
+            <EmptyState text="На сервере не задан секрет YANDEX_METRIKA_OAUTH_TOKEN — добавьте его, чтобы включить отчёты." />
+          ) : summary === null ? (
+            <LoadingView />
+          ) : (
+            <EmptyState text="Не удалось загрузить данные Яндекс.Метрики." />
+          )
+        ) : (
+          <>
+            <Text style={styles.metrikaPeriod}>Данные за {periodLabel} · счётчик {counterId ?? ""}</Text>
+
+            {/* Ключевые показатели */}
+            {summary?.state !== "ok" ? (
+              <InlineError text={summary?.detail || "Не удалось получить сводку."} />
+            ) : (
+              <View style={styles.metrikaStats}>
+                <View style={styles.statCard}><Text style={styles.statValue}>{fmtNum(totals.visits)}</Text><Text style={styles.statLabel}>Визиты</Text></View>
+                <View style={styles.statCard}><Text style={styles.statValue}>{fmtNum(totals.users)}</Text><Text style={styles.statLabel}>Пользователи</Text></View>
+                <View style={styles.statCard}><Text style={styles.statValue}>{fmtNum(totals.pageviews)}</Text><Text style={styles.statLabel}>Просмотры</Text></View>
+                <View style={styles.statCard}><Text style={styles.statValue}>{totals.revenue ? `${Math.round(totals.revenue).toLocaleString("ru-RU")} ₽` : "—"}</Text><Text style={styles.statLabel}>Выручка</Text></View>
+                <View style={styles.statCard}><Text style={styles.statValue}>{fmtNum(totals.purchases)}</Text><Text style={styles.statLabel}>Покупки</Text></View>
+              </View>
+            )}
+
+            {/* График по дням */}
+            {daily?.state !== "ok" ? (
+              <InlineError text={daily?.detail || "Не удалось построить график."} />
+            ) : (
+              <MetrikaDailyChart rows={daily?.data?.data ?? []} />
+            )}
+
+            {/* Цели воронки */}
+            {goals?.state === "ok" ? <MetrikaGoalsBlock goals={goals.data} /> : null}
+
+            {/* Источники трафика */}
+            {summary?.state !== "ok" ? null : (
+              <MetrikaRows
+                title={`Источники трафика (${periodLabel})`}
+                rows={summary?.data?.data ?? []}
+                renderMetrics={m => [
+                  `${fmtNum(m[0])} виз.`,
+                  `${fmtNum(m[2])} просм.`,
+                  m[4] ? `${Math.round(m[4]).toLocaleString("ru-RU")} ₽` : null,
+                ].filter(Boolean) as string[]}
+              />
+            )}
+
+            {/* Устройства */}
+            {devices?.state !== "ok" ? null : (
+              <MetrikaRows
+                title="Устройства"
+                rows={devices?.data?.data ?? []}
+                renderMetrics={m => [`${fmtNum(m[0])} виз.`, m[2] ? `отк. ${Math.round(m[2]*100)/100}%` : null].filter(Boolean) as string[]}
+              />
+            )}
+
+            {/* Города */}
+            {geo?.state !== "ok" ? null : (
+              <MetrikaRows
+                title={`Города (${periodLabel})`}
+                rows={geo?.data?.data ?? []}
+                renderMetrics={m => [`${fmtNum(m[0])} виз.`, `${fmtNum(m[1])} польз.`].filter(Boolean) as string[]}
+              />
+            )}
+
+            {/* Страницы входа */}
+            {pages?.state !== "ok" ? null : (
+              <MetrikaRows
+                title="Популярные страницы входа"
+                rows={pages?.data?.data ?? []}
+                renderMetrics={m => [`${fmtNum(m[0])} виз.`, `${fmtNum(m[1])} просм.`].filter(Boolean) as string[]}
+              />
+            )}
+
+            {/* Товары e-commerce */}
+            {products?.state !== "ok" ? (
+              <InlineError text={products?.detail || "Не удалось получить товары."} />
+            ) : (
+              <MetrikaRows
+                title={`Товары электронной коммерции (${periodLabel})`}
+                rows={products?.data?.data ?? []}
+                renderMetrics={m => [
+                  `${fmtNum(m[0])} пок.`,
+                  m[1] ? `${Math.round(m[1]).toLocaleString("ru-RU")} ₽` : null,
+                  m[2] ? `${fmtNum(m[2])} шт.` : null,
+                ].filter(Boolean) as string[]}
+              />
+            )}
+
+            {/* Продажи товара по дням */}
+            {productDates?.state !== "ok" ? null : (
+              <MetrikaProductDatesBlock rows={productDates?.data?.data ?? []} />
+            )}
+          </>
+        )}
+      </Card>
+    </>
+  );
+}
+
+function MetrikaDailyChart({ rows }: { rows: MetrikaRow[] }) {
+  if (!rows.length) return <Text style={styles.metrikaEmpty}>Нет данных за период.</Text>;
+  const visits = rows.map(r => Number(r.metrics?.[0] ?? 0));
+  const max = Math.max(1, ...visits);
+  return (
+    <View style={styles.metrikaList}>
+      <Text style={styles.metrikaListTitle}>Динамика визитов по дням</Text>
+      <View style={styles.chartBars}>
+        {rows.map((row, i) => {
+          const v = visits[i];
+          const label = row.dimensions?.[0]?.name ?? "";
+          const day = label.slice(5).replace("-", ".");
+          return (
+            <View key={i} style={styles.chartCol}>
+              <View style={styles.barTrackMini}>
+                <View style={[styles.bar, { backgroundColor: colors.accent, height: `${Math.max(2, (v / max) * 100)}%` }]} />
+              </View>
+              <Text style={styles.chartLabel} numberOfLines={1}>{day}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function MetrikaGoalsBlock({ goals }: { goals?: MetrikaGoalsType }) {
+  const list = goals?.goals || [];
+  if (!list.length) return null;
+  const max = Math.max(1, ...list.map((g) => g.reaches || 0));
+  return (
+    <View style={styles.metrikaList}>
+      <Text style={styles.metrikaListTitle}>Цели воронки (достижений за период)</Text>
+      {list.map((g, i) => (
+        <View key={g.id} style={styles.metrikaRow}>
+          <View style={styles.metrikaGoalLeft}>
+            <Text style={styles.metrikaRowName}>{g.name || "Без названия"}</Text>
+            <View style={styles.metrikaGoalBarTrack}>
+              <View
+                style={[
+                  styles.metrikaGoalBarFill,
+                  {
+                    width: `${Math.max(3, Math.min(100, ((g.reaches || 0) / max) * 100))}%`,
+                  },
+                ]}
+              />
+            </View>
+          </View>
+          <View style={styles.metrikaGoalRight}>
+            <Text style={styles.goalReaches}>{fmtNum(g.reaches)}</Text>
+            <Text style={styles.goalId}>#{g.id}</Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function MetrikaProductDatesBlock({ rows }: { rows: MetrikaRow[] }) {
+  if (!rows.length) return null;
+  return (
+    <View style={styles.metrikaList}>
+      <Text style={styles.metrikaListTitle}>Продажи товаров по дням</Text>
+      {(rows || []).slice(0, 20).map((row, index) => {
+        const name = row.dimensions?.[0]?.name || "Без названия";
+        const date = row.dimensions?.[1]?.name || "";
+        const m = row.metrics || [];
+        return (
+          <View key={index} style={styles.metrikaRow}>
+            <Text style={styles.metrikaRowName} numberOfLines={2}>{date} · {name}</Text>
+            <Text style={styles.metrikaRowMetrics}>
+              {[m[0] ? `${fmtNum(m[0])} пок.` : null, m[1] ? `${Math.round(m[1]).toLocaleString("ru-RU")} ₽` : null].filter(Boolean).join(" · ")}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function MetrikaRows({
+  title,
+  rows,
+  renderMetrics,
+}: {
+  title: string;
+  rows: MetrikaRow[];
+  renderMetrics: (m: number[]) => (string | null)[];
+}) {
+  return (
+    <View style={styles.metrikaList}>
+      <Text style={styles.metrikaListTitle}>{title}</Text>
+      {rows.length === 0 ? (
+        <Text style={styles.metrikaEmpty}>Нет данных за период.</Text>
+      ) : (
+        rows.slice(0, 20).map((row, index) => {
+          const name = row.dimensions?.map(d => d.name).filter(Boolean).join(" / ") || "Без названия";
+          const metrics = renderMetrics(row.metrics || []).filter(Boolean) as string[];
+          return (
+            <View key={index} style={styles.metrikaRow}>
+              <Text style={styles.metrikaRowName} numberOfLines={2}>{name}</Text>
+              <Text style={styles.metrikaRowMetrics}>{metrics.join(" · ")}</Text>
+            </View>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+function fmtNum(v: number | undefined | null): string {
+  return Number(v || 0).toLocaleString("ru-RU");
 }
 
 function MonthBarChart({
@@ -458,4 +844,91 @@ const styles = StyleSheet.create({
   },
   itemName: { color: colors.textMuted, fontSize: 12, flex: 1 },
   itemPrice: { color: colors.textMuted, fontSize: 12 },
+
+  // --- Яндекс.Метрика ---
+  metrikaDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  metrikaDividerLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  metrikaDividerLabel: { color: colors.textMuted, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 },
+  metrikaHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  metrikaTitleWrap: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flex: 1 },
+  metrikaIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  metrikaHeaderRight: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  metrikaStats: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  metrikaPeriod: { color: colors.textMuted, fontSize: 12, marginTop: spacing.md },
+  metrikaPeriodRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  metrikaPeriodChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  metrikaPeriodChipActive: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  metrikaPeriodChipText: { color: colors.textMuted, fontSize: 12 },
+  metrikaPeriodChipTextActive: { color: "#fff", fontWeight: "700" },
+  barTrackMini: {
+    width: 8,
+    height: 80,
+    justifyContent: "flex-end",
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  metrikaList: { marginTop: spacing.lg },
+  metrikaListTitle: { color: colors.text, fontSize: 14, fontWeight: "700", marginBottom: spacing.sm },
+  metrikaEmpty: { color: colors.textMuted, fontSize: 13 },
+  metrikaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  metrikaRowName: { color: colors.text, fontSize: 13, flex: 1, lineHeight: 18 },
+  metrikaRowMetrics: { color: colors.textMuted, fontSize: 12, textAlign: "right", lineHeight: 18 },
+  goalId: { color: colors.textMuted, fontSize: 11, textAlign: "right", lineHeight: 18, opacity: 0.6 },
+  metrikaGoalLeft: { flex: 1, gap: 4 },
+  metrikaGoalBarTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceAlt,
+    overflow: "hidden",
+  },
+  metrikaGoalBarFill: { height: "100%", borderRadius: 2, backgroundColor: colors.accent },
+  metrikaGoalRight: { alignItems: "flex-end" },
+  goalReaches: { color: colors.text, fontSize: 15, fontWeight: "700" },
 });

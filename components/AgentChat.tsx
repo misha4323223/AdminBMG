@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Animated,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { Button, EmptyState, InlineError } from "@/components/ui";
+import { Ionicons } from "@expo/vector-icons";
 import { apiPost, getErrorMessage } from "@/lib/api";
 import { tryLocalAssistant, tryLocalFallback } from "@/lib/agentAnalytics";
 import { getStoredJson, setStoredJson } from "@/lib/storage";
@@ -323,7 +326,22 @@ export function AgentChat({
             }
           }}
         />
-        <Button title="→" onPress={() => send()} loading={busy} />
+        {/* Кнопка отправки — компактная, фиксированного размера, не растягивается на всю ширину. */}
+        <View style={styles.composerButton}>
+          <Pressable
+            style={[styles.composerButtonInner, busy && styles.composerButtonBusy]}
+            onPress={() => send()}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel="Отправить сообщение"
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Ionicons name="arrow-forward" size={20} color="#fff" />
+            )}
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -389,5 +407,22 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     color: colors.text,
     maxHeight: 110,
+  },
+  composerButton: {
+    width: 48,
+    height: 48,
+    flexShrink: 0,
+    alignSelf: "flex-end",
+  },
+  composerButtonInner: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  composerButtonBusy: {
+    opacity: 0.7,
   },
 });
